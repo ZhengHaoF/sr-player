@@ -119,6 +119,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     _posSub?.cancel();
     _hideTimer?.cancel();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    // 强制恢复竖屏：主界面（视频库/文件/我的）均为竖屏设计，
+    // 不能依赖 '[]'(自动) 恢复——自动旋转关闭或模拟器无传感器时横屏会残留。
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     _player.dispose();
     super.dispose();
   }

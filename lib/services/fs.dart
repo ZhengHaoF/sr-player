@@ -46,7 +46,9 @@ class FsService {
   }
 
   /// 面包屑：把绝对路径拆成 (名称, 到该级的完整路径) 列表。
-  static List<(String, String)> breadcrumbs(String path) {
+  /// [root] 非空时，只展示主存储根目录及其子级（不再展示 /storage、
+  /// /storage/emulated 等无权限的上级路径，防止误入）。
+  static List<(String, String)> breadcrumbs(String path, {String? root}) {
     final result = <(String, String)>[];
     final normalized = path.endsWith('/') && path.length > 1
         ? path.substring(0, path.length - 1)
@@ -55,7 +57,11 @@ class FsService {
     var acc = '';
     for (final part in parts) {
       acc = '$acc/$part';
-      result.add((part, acc));
+      if (root == null || root.isEmpty) {
+        result.add((part, acc));
+      } else if (acc == root || acc.startsWith('$root/')) {
+        result.add((part, acc));
+      }
     }
     return result;
   }
