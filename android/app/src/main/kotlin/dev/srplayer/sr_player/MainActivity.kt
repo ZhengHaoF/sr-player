@@ -10,8 +10,12 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
+    /// 缩略图抽帧在后台单线程串行执行，避免解码阻塞平台主线程造成掉帧。
+    private val thumbExecutor = Executors.newSingleThreadExecutor()
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "sr_player/media")
@@ -25,13 +29,16 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                     "thumbnail" -> {
-                        try {
-                            result.success(queryThumbnail(
-                                path = call.argument<String>("path"),
-                                contentUri = call.argument<String>("contentUri"),
-                            ))
-                        } catch (e: Exception) {
-                            result.success(null)
+                        val path = call.argument<String>("path")
+                        val contentUri = call.argument<String>("contentUri")
+                        thumbExecutor.execute {
+                            val bytes = try {
+                                queryThumbnail(path, contentUri)
+                            } catch (e: Exception) {
+                                null
+                            }
+                            // MethodChannel 的 result 必须回到主线程回调。
+                            runOnUiThread { result.success(bytes) }
                         }
                     }
                     else -> result.notImplemented()

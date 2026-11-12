@@ -165,11 +165,18 @@ class _Thumb extends StatefulWidget {
 class _ThumbState extends State<_Thumb> {
   Uint8List? _bytes;
   bool _failed = false;
+  bool _disposed = false;
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -178,13 +185,16 @@ class _ThumbState extends State<_Thumb> {
       if (mounted) setState(() => _bytes = cached);
       return;
     }
-    final b = await ThumbCache.get(widget.path, contentUri: widget.contentUri);
-    if (mounted) {
-      setState(() {
-        _bytes = b;
-        _failed = b == null;
-      });
-    }
+    final b = await ThumbCache.get(
+      widget.path,
+      contentUri: widget.contentUri,
+      isCancelled: () => _disposed,
+    );
+    if (_disposed || !mounted) return;
+    setState(() {
+      _bytes = b;
+      _failed = b == null;
+    });
   }
 
   @override
