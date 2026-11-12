@@ -46,17 +46,21 @@ class ShaderService {
   ];
 
   /// 实验档（ArtCNN v1.6.2，单 compute shader，需 mpv vo=gpu-next）。
-  /// 着色器自带 `//!WHEN` 守卫：输出不足源分辨率 1.3 倍时自动跳过，不浪费 GPU。
+  /// 注意：media_kit 在 Android 把渲染面固定为视频原始分辨率，官方版的
+  /// `//!WHEN 输出>1.3x源` 守卫永不满足，因此打包的是去掉守卫的版本——
+  /// CNN 在源分辨率运行，去噪+锐化生效；真正放大需待渲染面尺寸修复。
   static const List<String> experimentalChain = [
     'ArtCNN_C4F32_DS.glsl',
   ];
 
   /// 当前打包的 libmpv 是否含 gpu-next(libplacebo) 渲染器。
   ///
-  /// media-kit 预编译库 v1.1.7 实测不含（真机日志：`Video output gpu-next not
-  /// found!`，且 vo 初始化 fatal 后无法通过切回 gpu 恢复画面）。若自编译带
-  /// gpu-next 的 libmpv 替换预编译库，改回 true 即可解锁实验档。
-  static const bool gpuNextAvailable = false;
+  /// media-kit 预编译库（≤v1.1.11 全部变体）不含 gpu-next；现已改用
+  /// Predidit/libmpv-android-video-build v1.3.1 的 libmpv.so（jniLibs 覆盖，
+  /// 见 android/app/build.gradle.kts 的 pickFirst），实验档解锁。
+  /// 已知限制：MuMu 模拟器显译层不执行 compute shader（无报错但无效果），
+  /// 真机待复测。
+  static const bool gpuNextAvailable = true;
 
   static List<String> chainFor(SrMode mode) => switch (mode) {
         SrMode.off => const [],

@@ -33,6 +33,14 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    packaging {
+        jniLibs {
+            // jniLibs 里的 Predidit libmpv.so（含 gpu-next/libplacebo）与
+            // media_kit_libs_android_video 插件下载的旧版同名，取 app 自己的。
+            pickFirsts += "**/libmpv.so"
+        }
+    }
 }
 
 kotlin {

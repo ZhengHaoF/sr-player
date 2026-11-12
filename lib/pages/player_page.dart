@@ -82,7 +82,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     super.initState();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _player = Player();
-    _controller = VideoController(_player);
+    // 持久化为实验档时走创建时路径挂 gpu-next（Android 控制器会用此 vo
+    // 覆盖 PlayerConfiguration，见 VideoControllerConfiguration 注释）；
+    // 其余档位用默认 gpu。播放中切换档位由 _applySr 运行时处理。
+    final persistedMode = ref.read(srModeProvider);
+    _controller = VideoController(
+      _player,
+      configuration: VideoControllerConfiguration(
+        vo: persistedMode == SrMode.experimental ? 'gpu-next' : 'gpu',
+      ),
+    );
     _posSub = _player.stream.position
         .where((_) => _ready)
         .distinct()
@@ -321,6 +330,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         // 用 ',' 会被当成一个整体路径，导致 Cannot open file、shader 静默不挂载。
         await platform.setProperty(
             'glsl-shaders', paths.join(Platform.isWindows ? ';' : ':'));
+        // 诊断：稍候 vo 初始化完成后输出实际生效的渲染器到 logcat。
+        await Future<void>.delayed(const Duration(milliseconds: 1200));
+        final vo = await platform.getProperty('current-vo');
+        debugPrint('[sr] mode=$mode glsl=${paths.length} current-vo=$vo');
       }
       if (notify && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

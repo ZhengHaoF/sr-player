@@ -19,7 +19,7 @@ extension SrModeLabel on SrMode {
         SrMode.quality =>
           'Anime4K CNN VL 档，画质最佳，对 GPU 要求较高，卡顿请切回性能档。',
         SrMode.experimental =>
-          'ArtCNN C4F32 DS（需含 gpu-next 的自编译内核），当前预编译内核不可用。',
+          'ArtCNN C4F32 DS（gpu-next 渲染器，CNN 去噪锐化），实验性，卡顿请切回性能档。',
       };
 }
 
