@@ -31,7 +31,7 @@ class _FilesPageState extends ConsumerState<FilesPage>
 
   /// 主存储根目录（异步确认前用常见路径兜底）。
   String get _root =>
-      ref.read(storageRootProvider).value ?? '/storage/emulated/0';
+      ref.read(storageRootProvider).value ?? FsService.fallbackRoot;
 
   @override
   bool get wantKeepAlive => true;
@@ -171,7 +171,7 @@ class _FilesPageState extends ConsumerState<FilesPage>
     // 使用 watch：路径/根目录变化时自动重建（返回回退后界面自动刷新）。
     final path = ref.watch(currentPathProvider);
     final root =
-        ref.watch(storageRootProvider).value ?? '/storage/emulated/0';
+        ref.watch(storageRootProvider).value ?? FsService.fallbackRoot;
     final crumbs = FsService.breadcrumbs(path, root: root);
     final isFav = AppStore.isFavorite(path);
     final favs = AppStore.favorites;
@@ -323,7 +323,7 @@ class _FilesPageState extends ConsumerState<FilesPage>
       onTap: () {
         Navigator.of(context)
             .push(MaterialPageRoute(
-          builder: (_) => PlayerPage(path: path, title: name),
+          builder: (_) => PlayerPage.local(path, title: name),
         ))
             .then((_) => _load());
       },

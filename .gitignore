@@ -49,3 +49,12 @@ test_shots/
 build_log*.txt
 android/build/
 **/build/
+
+# 本地参考文档（百度网盘 SDK 手册等）不入库
+docs/百度网盘Android_开放平台_2.10.2/
+
+# 真实凭证不入库（克隆后从 baidu_secrets_example.dart 复制）
+lib/services/netdisk/baidu_secrets.dart
+
+# 其他 AI 的独立试验项目不入库
+gpu_next_demo/

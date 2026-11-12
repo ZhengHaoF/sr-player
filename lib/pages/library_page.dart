@@ -1,22 +1,28 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models.dart';
+import '../services/app_store.dart';
+import '../services/fs.dart';
 import '../services/media_store.dart';
+import '../state.dart';
 import '../widgets/video_actions.dart';
 import '../widgets/video_tile.dart';
 import 'player_page.dart';
 
 /// 视频 Tab：全部视频网格 / 文件夹聚合，支持排序与长按管理。
-class LibraryPage extends StatefulWidget {
+class LibraryPage extends ConsumerStatefulWidget {
   const LibraryPage({super.key});
 
   @override
-  State<LibraryPage> createState() => _LibraryPageState();
+  ConsumerState<LibraryPage> createState() => _LibraryPageState();
 }
 
 enum _Sort { timeDesc, name, sizeDesc }
 
-class _LibraryPageState extends State<LibraryPage>
+class _LibraryPageState extends ConsumerState<LibraryPage>
     with AutomaticKeepAliveClientMixin {
   List<VideoItem> _videos = [];
   bool _loading = true;
@@ -70,6 +76,11 @@ class _LibraryPageState extends State<LibraryPage>
             ),
             const Divider(height: 1),
             ListTile(
+              leading: const Icon(Icons.drive_file_move_outlined),
+              title: const Text('跳转去文件夹'),
+              onTap: () => Navigator.pop(ctx, 'jump'),
+            ),
+            ListTile(
               leading: const Icon(Icons.drive_file_rename_outline),
               title: const Text('重命名'),
               onTap: () => Navigator.pop(ctx, 'rename'),
@@ -85,6 +96,8 @@ class _LibraryPageState extends State<LibraryPage>
     );
     if (!mounted || action == null) return;
     switch (action) {
+      case 'jump':
+        _jumpToFolder(v.folder);
       case 'rename':
         if (await renameVideo(context, v)) _load();
       case 'delete':
@@ -92,9 +105,82 @@ class _LibraryPageState extends State<LibraryPage>
     }
   }
 
+  /// 跳转到文件 Tab 的指定目录：设置 currentPathProvider 并切到文件 Tab，
+  /// FilesPage 监听路径变化会自动加载。
+  void _jumpToFolder(String path) {
+    final root =
+        ref.read(storageRootProvider).value ?? FsService.fallbackRoot;
+    // 与文件页 _enter 相同的守卫：只允许主存储根目录内。
+    if (path != root && !path.startsWith('$root/')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('该文件夹不在主存储内，无法跳转'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    // MediaStore 扫描结果可能过期，跳转前确认目录仍存在。
+    if (!Directory(path).existsSync()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('文件夹不存在或已被移动'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    ref.read(currentPathProvider.notifier).set(path);
+    ref.read(currentTabProvider.notifier).set(1);
+  }
+
+  /// 文件夹视图的长按菜单：跳转去文件夹 / 收藏该文件夹。
+  Future<void> _folderManage(String folder) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.folder, color: Colors.amber),
+              title: Text(folder.split('/').last,
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+              subtitle: Text(folder, maxLines: 1, overflow: TextOverflow.ellipsis),
+              onTap: () => Navigator.pop(ctx),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.drive_file_move_outlined),
+              title: const Text('跳转去文件夹'),
+              onTap: () => Navigator.pop(ctx, 'jump'),
+            ),
+            ListTile(
+              leading: Icon(
+                AppStore.isFavorite(folder) ? Icons.star : Icons.star_border,
+                color: AppStore.isFavorite(folder) ? Colors.amber : null,
+              ),
+              title: Text(AppStore.isFavorite(folder)
+                  ? '取消收藏该文件夹'
+                  : '收藏该文件夹'),
+              onTap: () => Navigator.pop(ctx, 'fav'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || action == null) return;
+    switch (action) {
+      case 'jump':
+        _jumpToFolder(folder);
+      case 'fav':
+        await AppStore.toggleFavorite(folder);
+    }
+  }
+
   void _open(VideoItem v) {
     Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => PlayerPage(path: v.path, title: v.name),
+      builder: (_) => PlayerPage.local(v.path, title: v.name),
     )).then((_) => _load());
   }
 
@@ -196,39 +282,52 @@ class _LibraryPageState extends State<LibraryPage>
               builder: (_) => _FolderDetailPage(folder: folder, videos: items),
             )).then((_) => _load());
           },
+          onLongPress: () => _folderManage(folder),
         );
       },
     );
   }
 }
 
-class _FolderDetailPage extends StatelessWidget {
+class _FolderDetailPage extends StatefulWidget {
   final String folder;
   final List<VideoItem> videos;
 
   const _FolderDetailPage({required this.folder, required this.videos});
 
   @override
+  State<_FolderDetailPage> createState() => _FolderDetailPageState();
+}
+
+class _FolderDetailPageState extends State<_FolderDetailPage> {
+  late List<VideoItem> _videos = [...widget.videos];
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(folder.split('/').last)),
+      appBar: AppBar(title: Text(widget.folder.split('/').last)),
       body: ListView.builder(
-        itemCount: videos.length,
+        itemCount: _videos.length,
         itemBuilder: (_, i) {
-          final v = videos[i];
+          final v = _videos[i];
           return ListTile(
             leading: const Icon(Icons.play_circle_outline, size: 40),
             title: Text(v.name, maxLines: 1, overflow: TextOverflow.ellipsis),
             subtitle: Text('${v.durationLabel}  ${v.sizeLabel}'),
             onTap: () {
               Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => PlayerPage(path: v.path, title: v.name),
+                builder: (_) => PlayerPage.local(v.path, title: v.name),
               ));
             },
-            onLongPress: () {
-              Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => PlayerPage(path: v.path, title: v.name),
-              ));
+            onLongPress: () async {
+              final changed = await showVideoActions(context, v);
+              if (!changed) return;
+              // 重命名/删除后重扫媒体库，刷新本页列表。
+              final all = await MediaStoreService.listVideos();
+              if (!mounted) return;
+              setState(() {
+                _videos = all.where((x) => x.folder == widget.folder).toList();
+              });
             },
           );
         },

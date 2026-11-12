@@ -2,13 +2,14 @@
 library;
 
 /// 超分辨率档位。
-enum SrMode { off, performance, quality }
+enum SrMode { off, performance, quality, experimental }
 
 extension SrModeLabel on SrMode {
   String get label => switch (this) {
         SrMode.off => '关闭',
         SrMode.performance => '性能',
         SrMode.quality => '质量',
+        SrMode.experimental => '实验',
       };
 
   String get desc => switch (this) {
@@ -17,6 +18,8 @@ extension SrModeLabel on SrMode {
           'Anime4K CNN S/M 档，兼顾流畅与画质，大多数设备推荐。',
         SrMode.quality =>
           'Anime4K CNN VL 档，画质最佳，对 GPU 要求较高，卡顿请切回性能档。',
+        SrMode.experimental =>
+          'ArtCNN C4F32 DS（需含 gpu-next 的自编译内核），当前预编译内核不可用。',
       };
 }
 

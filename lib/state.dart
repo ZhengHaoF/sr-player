@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'models.dart';
 import 'services/app_store.dart';
 import 'services/fs.dart';
+import 'services/netdisk/baidu_auth.dart';
 
 /// SR 档位全局状态：播放器页与设置页共享。
 class SrModeController extends Notifier<SrMode> {
@@ -21,7 +22,7 @@ final srModeProvider =
 /// 目录树当前路径：文件页与"收藏跳转"共享。
 class CurrentPathController extends Notifier<String> {
   @override
-  String build() => '/storage/emulated/0';
+  String build() => FsService.fallbackRoot;
 
   void set(String path) => state = path;
 }
@@ -44,3 +45,32 @@ class CurrentTabController extends Notifier<int> {
 
 final currentTabProvider =
     NotifierProvider<CurrentTabController, int>(CurrentTabController.new);
+
+/// 网盘浏览当前目录（云盘绝对路径，根为 /）。
+class CloudPathController extends Notifier<String> {
+  @override
+  String build() => '/';
+
+  void set(String path) => state = path;
+}
+
+final cloudPathProvider =
+    NotifierProvider<CloudPathController, String>(CloudPathController.new);
+
+/// 网盘登录态：登录/登出后通知网盘页刷新。
+class CloudLoggedInController extends Notifier<bool> {
+  @override
+  bool build() => BaiduAuth.hasToken;
+
+  Future<void> refresh() async {
+    state = BaiduAuth.hasToken;
+  }
+
+  Future<void> logout() async {
+    await BaiduAuth.logout();
+    state = false;
+  }
+}
+
+final cloudLoggedInProvider =
+    NotifierProvider<CloudLoggedInController, bool>(CloudLoggedInController.new);

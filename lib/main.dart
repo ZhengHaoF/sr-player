@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
@@ -9,9 +7,8 @@ import 'services/app_store.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  if (Platform.isAndroid) {
-    MediaKit.ensureInitialized();
-  }
+  // Android 与 Windows 均由 media_kit 系列库提供 libmpv 原生后端。
+  MediaKit.ensureInitialized();
   await AppStore.init();
   runApp(const ProviderScope(child: SrPlayerApp()));
 }

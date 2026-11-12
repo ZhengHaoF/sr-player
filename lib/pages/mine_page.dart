@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models.dart';
 import '../services/app_store.dart';
 import '../services/fs.dart';
+import '../services/netdisk/baidu_auth.dart';
+import '../services/netdisk/play_source.dart';
 import '../state.dart';
 import 'files_page.dart';
 import 'player_page.dart';
@@ -146,9 +148,26 @@ class HistoryPage extends StatelessWidget {
                   title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
                   subtitle: Text('看到 $pct% · ${dt.month}/${dt.day} ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}'),
                   onTap: () {
-                    if (File(path).existsSync()) {
-                      Navigator.push(context,
-                          MaterialPageRoute(builder: (_) => PlayerPage(path: path, title: name)));
+                    // 云盘条目（baidu:// 前缀）在线播放；本地条目先校验存在。
+                    if (path.startsWith('baidu://')) {
+                      if (!BaiduAuth.hasToken) {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                            content: Text('网盘登录已过期，请到「网盘」页重新授权')));
+                        return;
+                      }
+                      final cloudPath = path.substring('baidu://'.length);
+                      Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => PlayerPage(
+                                  source: BaiduPlayableSource(
+                                      cloudPath: cloudPath, title: name))));
+                    } else if (File(path).existsSync()) {
+                      Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) =>
+                                  PlayerPage.local(path, title: name)));
                     } else {
                       ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(content: Text('文件不存在')));

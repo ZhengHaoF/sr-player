@@ -12,15 +12,50 @@ import 'media_store.dart';
 class FsService {
   FsService._();
 
+  /// 当前平台的主存储根目录（同步兜底值；异步确认见 [storageRoot]）。
+  /// Windows 用用户主目录（覆盖 视频/下载/文档/桌面 等常见媒体位置），
+  /// 路径统一为 '/' 分隔，与内部所有路径处理逻辑一致。
+  static String get fallbackRoot {
+    if (!Platform.isWindows) return '/storage/emulated/0';
+    return normalizePath(Platform.environment['USERPROFILE'] ?? r'C:\Users\Public');
+  }
+
+  /// 路径分隔符归一化：Windows 原生 '\' → '/'。
+  /// Dart 的 File/Directory 在 Windows 上两种分隔符都接受，
+  /// mpv 亦然，内部统一用 '/' 可复用全部按 '/' 拆分的路径逻辑。
+  static String normalizePath(String path) => path.replaceAll('\\', '/');
+
+  /// Windows 上即使不显示隐藏文件也不该出现的系统目录/文件
+  /// （体量巨大或无意义，目录树与视频扫描都应跳过）。
+  static const Set<String> _windowsSystemNames = {
+    'AppData',
+    r'$Recycle.Bin',
+    'System Volume Information',
+  };
+
+  static bool isSystemHiddenName(String name) {
+    if (!Platform.isWindows) return false;
+    return _windowsSystemNames.contains(name) || name.startsWith('ntuser.');
+  }
+
   /// 列出目录内容：隐藏文件按设置过滤，文件夹在前、各按名称排序。
   static Future<List<FileSystemEntity>> listDir(String path) async {
     final dir = Directory(path);
     final entries = await dir.list(followLinks: false).toList();
+    // Windows 原生 '\' 分隔路径统一归一化，后续名称/父目录逻辑才成立。
+    final normalized = [
+      for (final e in entries)
+        e is Directory
+            ? Directory(normalizePath(e.path))
+            : (e is Link ? Link(normalizePath(e.path)) : File(normalizePath(e.path))),
+    ];
     final showHidden = AppStore.showHidden;
 
-    final visible = entries.where((e) {
+    final visible = normalized.where((e) {
       final name = fileNameOf(e.path);
-      if (!showHidden && name.startsWith('.')) return false;
+      if (!showHidden && (name.startsWith('.') || isSystemHiddenName(name))) {
+        return false;
+      }
       return true;
     }).toList();
 
@@ -69,12 +104,14 @@ class FsService {
 
   /// 主存储根目录。
   static Future<String> storageRoot() async {
+    // Windows：用户主目录即"主存储"，与同步兜底值一致。
+    if (Platform.isWindows) return fallbackRoot;
     // Android 主存储固定路径；用目录存在性兜底。
     const candidates = ['/storage/emulated/0', '/sdcard'];
     for (final c in candidates) {
       if (Directory(c).existsSync()) return c;
     }
-    return (await getApplicationDocumentsDirectory()).path;
+    return normalizePath((await getApplicationDocumentsDirectory()).path);
   }
 }
 

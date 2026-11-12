@@ -107,4 +107,13 @@ class AppStore {
       await _p.remove(key);
     }
   }
+
+  // ---------- 通用键值（百度网盘 token / 偏好等使用） ----------
+
+  static String? getString(String key) => _p.getString(key);
+  static Future<void> setString(String key, String value) =>
+      _p.setString(key, value);
+  static int? getInt(String key) => _p.getInt(key);
+  static Future<void> setInt(String key, int value) => _p.setInt(key, value);
+  static Future<void> remove(String key) => _p.remove(key);
 }

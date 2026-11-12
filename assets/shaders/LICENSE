@@ -1,6 +1,13 @@
 MIT License
 
 Copyright (c) 2019 bloc97
+(Covers Anime4K_*.glsl, v4.0.1, https://github.com/bloc97/Anime4K)
+
+---
+
+ArtCNN_*.glsl are from ArtCNN v1.6.2, MIT License,
+Copyright (c) 2024 João Chrisóstomo, https://github.com/Artoriuz/ArtCNN,
+and carry their own MIT notice inline.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

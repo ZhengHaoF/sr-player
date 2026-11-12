@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,6 +9,7 @@ import '../services/fs.dart';
 import 'files_page.dart';
 import 'library_page.dart';
 import 'mine_page.dart';
+import 'netdisk_page.dart';
 import '../state.dart';
 
 /// 首页：权限门禁 + 三 Tab（视频 / 文件 / 我的）。
@@ -42,6 +45,17 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
   }
 
   Future<void> _check() async {
+    // 桌面端（Windows）没有运行时存储权限，直接放行；
+    // permission_handler 不支持桌面平台。
+    if (!Platform.isAndroid) {
+      if (mounted) {
+        setState(() {
+          _storageGranted = true;
+          _checked = true;
+        });
+      }
+      return;
+    }
     final manage = await Permission.manageExternalStorage.isGranted;
     final media = await Permission.videos.isGranted;
     if (mounted) {
@@ -61,13 +75,14 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
     await _check();
   }
 
-  /// 统一返回处理：文件 Tab 在子目录时回退父目录（FilesPage 监听路径自动刷新）；
+  /// 统一返回处理：文件 Tab / 网盘 Tab 在子目录时回退父目录（页面监听路径自动刷新）；
   /// 到达各 Tab 根页面时执行经典双击退出。
   void _handleRootBack() {
+    final tab = ref.read(currentTabProvider);
     // 文件 Tab 激活时，子目录优先回退父目录，不触发退出提示。
-    if (ref.read(currentTabProvider) == 1) {
+    if (tab == 1) {
       final root =
-          ref.read(storageRootProvider).value ?? '/storage/emulated/0';
+          ref.read(storageRootProvider).value ?? FsService.fallbackRoot;
       final current = ref.read(currentPathProvider);
       // 异常路径（如 /storage，不在根目录内）直接拉回根目录。
       if (current != root && !current.startsWith('$root/')) {
@@ -81,6 +96,15 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
           ref.read(currentPathProvider.notifier).set(parent);
           return;
         }
+      }
+    }
+    // 网盘 Tab：云目录回退父目录。
+    if (tab == 2) {
+      final current = ref.read(cloudPathProvider);
+      if (current != '/') {
+        final i = current.lastIndexOf('/');
+        ref.read(cloudPathProvider.notifier).set(i <= 0 ? '/' : current.substring(0, i));
+        return;
       }
     }
     // 根页面：经典双击退出——2 秒内再按一次才真正退出，否则提示。
@@ -119,7 +143,7 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
         child: Scaffold(
           body: IndexedStack(
             index: tab,
-            children: const [LibraryPage(), FilesPage(), MinePage()],
+            children: const [LibraryPage(), FilesPage(), NetdiskPage(), MinePage()],
           ),
           bottomNavigationBar: NavigationBar(
             selectedIndex: tab,
@@ -128,6 +152,7 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
             destinations: const [
               NavigationDestination(icon: Icon(Icons.movie_outlined), selectedIcon: Icon(Icons.movie), label: '视频'),
               NavigationDestination(icon: Icon(Icons.folder_outlined), selectedIcon: Icon(Icons.folder), label: '文件'),
+              NavigationDestination(icon: Icon(Icons.cloud_outlined), selectedIcon: Icon(Icons.cloud), label: '网盘'),
               NavigationDestination(icon: Icon(Icons.person_outlined), selectedIcon: Icon(Icons.person), label: '我的'),
             ],
           ),

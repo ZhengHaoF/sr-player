@@ -5,6 +5,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
 
 import '../models.dart';
+import 'fs.dart';
 
 /// Anime4K GLSL 着色器管理。
 ///
@@ -44,10 +45,24 @@ class ShaderService {
     'Anime4K_Upscale_CNN_x2_M.glsl',
   ];
 
+  /// 实验档（ArtCNN v1.6.2，单 compute shader，需 mpv vo=gpu-next）。
+  /// 着色器自带 `//!WHEN` 守卫：输出不足源分辨率 1.3 倍时自动跳过，不浪费 GPU。
+  static const List<String> experimentalChain = [
+    'ArtCNN_C4F32_DS.glsl',
+  ];
+
+  /// 当前打包的 libmpv 是否含 gpu-next(libplacebo) 渲染器。
+  ///
+  /// media-kit 预编译库 v1.1.7 实测不含（真机日志：`Video output gpu-next not
+  /// found!`，且 vo 初始化 fatal 后无法通过切回 gpu 恢复画面）。若自编译带
+  /// gpu-next 的 libmpv 替换预编译库，改回 true 即可解锁实验档。
+  static const bool gpuNextAvailable = false;
+
   static List<String> chainFor(SrMode mode) => switch (mode) {
         SrMode.off => const [],
         SrMode.performance => performanceChain,
         SrMode.quality => qualityChain,
+        SrMode.experimental => experimentalChain,
       };
 
   /// 解析某档位全部着色器的本地路径（保证已落地到缓存目录）。
@@ -61,7 +76,8 @@ class ShaderService {
 
     final result = <String>[];
     for (final name in names) {
-      result.add(await _ensureFile(dir, name));
+      // 归一化为 '/' 分隔，交给 mpv 时 Windows/Android 表现一致。
+      result.add(FsService.normalizePath(await _ensureFile(dir, name)));
     }
     return result;
   }
