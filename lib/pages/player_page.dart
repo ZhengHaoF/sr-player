@@ -80,7 +80,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       final paths = await ShaderService.resolveChain(mode);
       final platform = _player.platform;
       if (platform is NativePlayer) {
-        await platform.setProperty('glsl-shaders', paths.join(','));
+        // glsl-shaders 是 mpv 的路径列表选项：分隔符在 Unix/Android 上是 ':'（Windows 为 ';'），
+        // 用 ',' 会被当成一个整体路径，导致 Cannot open file、shader 静默不挂载。
+        await platform.setProperty('glsl-shaders', paths.join(':'));
       }
       if (notify && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -211,7 +213,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         children: [
           Center(
             child: _ready
-                ? Video(controller: _controller)
+                ? Video(controller: _controller, controls: NoVideoControls)
                 : const CircularProgressIndicator(),
           ),
           // 控制层。
