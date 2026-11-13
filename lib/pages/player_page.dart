@@ -57,7 +57,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   // —— 在线流打开自愈状态：等待 mpv 解析出轨道视为打开成功；
   //    期间收到 lavf/demux 错误（如分片扩展名被 ffmpeg 9 拒绝）则换下一档
   //    demuxer-lavf-o 重试。
+  //    _awaitingTracks 与 _pendingOpen 分开：本地源同样要等轨道（否则必然
+  //    等满 10s 超时误判打开失败），lavf 错误检测则仅对在线流生效——本地
+  //    存在 benign lavf error（file cache）不应中断打开。
   bool _pendingOpen = false;
+  bool _awaitingTracks = false;
   bool _gotTracks = false;
   String? _openFailure;
   StreamSubscription? _tracksSub;
@@ -89,7 +93,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     _controller = VideoController(
       _player,
       configuration: VideoControllerConfiguration(
-        vo: persistedMode == SrMode.experimental ? 'gpu-next' : 'gpu',
+        vo: persistedMode == SrMode.experimental &&
+                ShaderService.gpuNextAvailable
+            ? 'gpu-next'
+            : 'gpu',
       ),
     );
     _posSub = _player.stream.position
@@ -103,7 +110,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       _savePosition(pos);
     });
     _tracksSub = _player.stream.tracks.listen((_) {
-      if (_pendingOpen) _gotTracks = true;
+      if (_awaitingTracks) _gotTracks = true;
     });
     // mpv 日志（warn 及以上）打到 logcat，便于排查 shader / vo / 网络流问题。
     _logSub = _player.stream.log
@@ -213,6 +220,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         _gotTracks = false;
         _openFailure = null;
         _pendingOpen = isNetwork;
+        _awaitingTracks = true;
         await _player.open(Media(stream.uri,
             httpHeaders: stream.headers.isEmpty ? null : stream.headers));
         // 等轨道解析成功（最多 10s）；期间出现 lavf/demux 错误则提前失败。
@@ -228,6 +236,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           await Future<void>.delayed(const Duration(milliseconds: 100));
         }
         _pendingOpen = false;
+        _awaitingTracks = false;
         if (ok) break;
         debugPrint('[net] 打开失败（lavf-o="${attempt.isEmpty ? '默认' : attempt}"'
             '${_openFailure == null ? '' : ", $_openFailure"}），尝试下一档');
