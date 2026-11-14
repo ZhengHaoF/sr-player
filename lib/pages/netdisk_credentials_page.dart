@@ -5,8 +5,8 @@ import '../services/netdisk/baidu_config.dart';
 
 /// 百度网盘凭证设置页：填写 AppKey / SecretKey → 缓存本机 → 可选即时验证。
 ///
-/// 凭证只写入本机 shared_preferences，不上传、不入库。
-/// 未填写时回退编译期内置值（仓库内为 `YOUR_xxx` 占位模板，不可用）。
+/// 凭证只写入本机 shared_preferences，不上传、不入库；
+/// 这是唯一的凭证来源，未配置时网盘无法登录。
 class NetdiskCredentialsPage extends StatefulWidget {
   const NetdiskCredentialsPage({super.key});
 
@@ -67,7 +67,7 @@ class _NetdiskCredentialsPageState extends State<NetdiskCredentialsPage> {
       _secretKey.clear();
       _signKey.clear();
       _ok = false;
-      _result = '已清除本机凭证，回退编译期内置值';
+      _result = '已清除本机凭证';
     });
   }
 
@@ -93,7 +93,7 @@ class _NetdiskCredentialsPageState extends State<NetdiskCredentialsPage> {
               leading: Icon(ready ? Icons.verified_user_outlined : Icons.warning_amber_outlined,
                   color: ready ? Colors.green : Colors.orange),
               title: Text(ready ? '凭证已就绪' : '凭证未配置'),
-              subtitle: Text('来源：${BaiduConfig.sourceLabel}'),
+              subtitle: const Text('凭证保存在本机（shared_preferences）'),
             ),
           ),
           const SizedBox(height: 8),

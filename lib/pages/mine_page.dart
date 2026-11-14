@@ -86,8 +86,8 @@ class _MinePageState extends ConsumerState<MinePage>
           leading: const Icon(Icons.vpn_key_outlined),
           title: const Text('百度网盘凭证'),
           subtitle: Text(
-            BaiduConfig.hasUserCredentials
-                ? '已配置（来源：${BaiduConfig.sourceLabel}）'
+            BaiduConfig.credentialsConfigured
+                ? '已配置'
                 : '未配置：网盘登录需要开放平台 AppKey / SecretKey',
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
