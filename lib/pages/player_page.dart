@@ -51,7 +51,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   StreamSubscription? _posSub;
   StreamSubscription? _logSub;
 
-  /// 当前由本页设置的 mpv vo；空串表示未干预（mpv 默认，Android 上通常为 gpu）。
+  /// 当前生效的 mpv vo。initState 按持久化档位登记（经 Android 控制器配置，
+  /// 首帧加载时由控制器统一写入 mpv），播放中切档由 [_applySr] 运行时接管。
   String _vo = '';
 
   /// 日志监听器记录的最近一条 vo fatal/error 文本，供 vo 探测自愈判断。
@@ -76,6 +77,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   /// 打开/换档期间仅当 position 达到 seek 目标后才允许写入，10s 兜底解除。
   int _saveGateMs = 0;
   Timer? _gateTimer;
+
+  /// 打开代际：每次 [_openMedia] 递增，用于作废仍在跑的后台收尾
+  /// （加载期间换清晰度/重开的场景）。
+  int _openSeq = 0;
 
   // 方向偏好循环：自动 → 横屏 → 竖屏。
   int _orientation = 0;
@@ -113,15 +118,21 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     // 覆盖 PlayerConfiguration，见 VideoControllerConfiguration 注释）；
     // 其余档位用默认 gpu。播放中切换档位由 _applySr 运行时处理。
     final persistedMode = ref.read(srModeProvider);
+    // 持久化为实验档时走创建时路径挂 gpu-next（Android 控制器会用此 vo
+    // 覆盖 PlayerConfiguration，见 VideoControllerConfiguration 注释）；
+    // 其余档位用默认 gpu。
+    final initialVo =
+        persistedMode == SrMode.experimental && ShaderService.gpuNextAvailable
+            ? 'gpu-next'
+            : 'gpu';
     _controller = VideoController(
       _player,
-      configuration: VideoControllerConfiguration(
-        vo: persistedMode == SrMode.experimental &&
-                ShaderService.gpuNextAvailable
-            ? 'gpu-next'
-            : 'gpu',
-      ),
+      configuration: VideoControllerConfiguration(vo: initialVo),
     );
+    // 创建时路径的 vo 由控制器在首帧加载时统一写入 mpv，这里同步登记到
+    // _vo，避免 _applySr 首次打开时再写一次同值 vo——mpv 对 vo 属性的
+    // 运行时写入会销毁重建 VO，撞上首帧初始化会偶发渲染链卡死（黑屏有声）。
+    _vo = initialVo;
     _posSub = _player.stream.position
         .where((_) => _ready)
         .distinct()
@@ -221,6 +232,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   Future<void> _openMedia(PlayStream stream, {int? resumeMs}) async {
     final platform = _player.platform;
     final isNetwork = stream.isNetwork;
+    _openSeq++; // 作废上一轮仍在跑的后台收尾
     try {
       if (platform is NativePlayer) {
         await platform.setProperty('sub-auto', 'fuzzy');
@@ -284,34 +296,48 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       }
       // start 已让 mpv 在加载期定位；播放起来后校验到位，未到位则直 seek 补偿。
       await _player.play();
-      if (targetMs > 0) {
-        var settled = false;
-        for (var i = 0; i < 20; i++) {
-          await Future<void>.delayed(const Duration(milliseconds: 500));
-          final now = _player.state.position.inMilliseconds;
-          if (now >= targetMs * 0.5 && (now - targetMs).abs() <= 15000) {
-            settled = true;
-            break;
-          }
-          if (i == 9) {
-            debugPrint('[net] start 未生效（now=$now, want=$targetMs），直 seek 补偿');
-            await _player.seek(Duration(milliseconds: targetMs));
-          }
-        }
-        if (!settled) debugPrint('[net] 续播位置校验未通过（可能仍在缓冲）');
-        _saveGateMs = 0; // 定位完成，恢复正常保存
-      } else {
-        _saveGateMs = 0;
-      }
-      if (platform is NativePlayer) {
-        await platform.setProperty('start', 'none'); // 清理，避免影响后续打开
-      }
-      // 应用当前 SR 档位。
-      await _applySr(ref.read(srModeProvider), notify: false);
-      if (mounted) setState(() => _ready = true);
+      // 轨道已确认、play 已发起：mpv 已在出流（音频/进度先走），此时就应展示
+      // 画面。续播校验与 SR 挂载是补偿/配置性质，转后台跑，不再以固定延迟
+      // （校验循环 ≥500ms + 诊断 1.2s）推迟首帧。
+      if (!mounted) return;
+      setState(() => _ready = true);
+      unawaited(_postOpenSettle(targetMs));
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
     }
+  }
+
+  /// 打开后的后台收尾：续播位置校验/补偿、start 清理、挂载当前 SR 档位。
+  /// 与 [_openMedia] 主体解耦，不阻塞首帧展示。
+  Future<void> _postOpenSettle(int targetMs) async {
+    final seq = _openSeq;
+    final srMode = ref.read(srModeProvider);
+    if (targetMs > 0) {
+      var settled = false;
+      for (var i = 0; i < 20; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        if (!mounted || seq != _openSeq) return;
+        final now = _player.state.position.inMilliseconds;
+        if (now >= targetMs * 0.5 && (now - targetMs).abs() <= 15000) {
+          settled = true;
+          break;
+        }
+        if (i == 9) {
+          debugPrint('[net] start 未生效（now=$now, want=$targetMs），直 seek 补偿');
+          await _player.seek(Duration(milliseconds: targetMs));
+        }
+      }
+      if (!settled) debugPrint('[net] 续播位置校验未通过（可能仍在缓冲）');
+    }
+    if (seq != _openSeq) return; // 期间已重开，本轮收尾作废
+    _saveGateMs = 0; // 定位完成，恢复正常保存
+    if (!mounted) return;
+    final platform = _player.platform;
+    if (platform is NativePlayer) {
+      await platform.setProperty('start', 'none'); // 清理，避免影响后续打开
+    }
+    // 应用当前 SR 档位。
+    await _applySr(srMode, notify: false);
   }
 
   /// 切换清晰度：记录当前位置 → 换 URL 重开 → seek 回原位置。
@@ -371,9 +397,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         await platform.setProperty(
             'glsl-shaders', paths.join(Platform.isWindows ? ';' : ':'));
         // 诊断：稍候 vo 初始化完成后输出实际生效的渲染器到 logcat。
-        await Future<void>.delayed(const Duration(milliseconds: 1200));
-        final vo = await platform.getProperty('current-vo');
-        debugPrint('[sr] mode=$mode glsl=${paths.length} current-vo=$vo');
+        // 不 await：固定延迟若阻塞在此，每次打开都会白付 1.2s 才出画面。
+        unawaited(Future<void>.delayed(const Duration(milliseconds: 1200),
+            () async {
+          try {
+            final vo = await platform.getProperty('current-vo');
+            debugPrint('[sr] mode=$mode glsl=${paths.length} current-vo=$vo');
+          } catch (_) {// 播放器已释放等场景，诊断失败无碍
+          }
+        }));
       }
       if (notify && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
