@@ -602,6 +602,62 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     );
   }
 
+  /// 视频详情：打开弹层时读取一次参数快照（mpv 状态 + 少量属性查询）。
+  Future<void> _showInfoSheet() async {
+    final groups = await _collectInfoGroups(
+      player: _player,
+      srMode: ref.read(srModeProvider),
+      source: widget.source,
+      qualityLabel: _qualityLabel,
+    );
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      // 参数分组较多，允许弹层撑高并让内容滚动（与画面设置弹层同策略）。
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
+              child: Text('视频信息',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                '打开弹层时读取的参数快照。',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ),
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final g in groups) ...[
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
+                        child: Text(g.title,
+                            style: const TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.bold)),
+                      ),
+                      for (final (label, value) in g.rows)
+                        _infoRow(label, value),
+                    ],
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_error.isNotEmpty) {
@@ -733,9 +789,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                 ),
               ),
               IconButton(
-                tooltip: '画面设置',
-                onPressed: _showSrSheet,
-                icon: const Icon(Icons.tune, color: Colors.white),
+                tooltip: '视频信息',
+                onPressed: _showInfoSheet,
+                icon: const Icon(Icons.info_outline, color: Colors.white),
               ),
               const SizedBox(width: 8),
             ],
@@ -940,4 +996,225 @@ class _StreamPlayButton extends StatelessWidget {
       },
     );
   }
+}
+
+// —— 视频详情弹层（顶栏"视频信息"按钮）——
+
+/// 视频详情的一个分组；rows 为 (标签, 值) 对，值缺失的行在收集时省略。
+class _InfoGroup {
+  final String title;
+  final List<(String, String)> rows;
+  const _InfoGroup(this.title, this.rows);
+}
+
+/// 详情弹层一行：左侧灰色标签，右侧取值。
+Widget _infoRow(String label, String value) {
+  return Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 80,
+          child: Text(label,
+              style: const TextStyle(fontSize: 13, color: Colors.grey)),
+        ),
+        Expanded(
+          child: Text(value, style: const TextStyle(fontSize: 13)),
+        ),
+      ],
+    ),
+  );
+}
+
+/// mpv 属性查询：非 native 内核或属性缺失时返回 null。
+Future<String?> _mpvProp(Player player, String name) async {
+  final platform = player.platform;
+  if (platform is! NativePlayer) return null;
+  try {
+    return await platform.getProperty(name);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// state.track 在流刚打开时可能仍停留 auto/no，回退到第一条真实轨道。
+T _activeTrack<T>(T selected, List<T> all, String Function(T) id) {
+  if (id(selected) != 'auto' && id(selected) != 'no') return selected;
+  final real = _realTracks(all, id);
+  return real.isEmpty ? selected : real.first;
+}
+
+/// 过滤 mpv 的 auto/no 伪轨道。
+List<T> _realTracks<T>(List<T> all, String Function(T) id) =>
+    all.where((t) => id(t) != 'auto' && id(t) != 'no').toList();
+
+/// 汇总视频详情各分组：快照取自 player.state，少量属性走 mpv 查询。
+Future<List<_InfoGroup>> _collectInfoGroups({
+  required Player player,
+  required SrMode srMode,
+  required PlayableSource source,
+  required String qualityLabel,
+}) async {
+  final st = player.state;
+  final vt = _activeTrack(st.track.video, st.tracks.video, (t) => t.id);
+  final at = _activeTrack(st.track.audio, st.tracks.audio, (t) => t.id);
+  final vp = st.videoParams;
+  final ap = st.audioParams;
+
+  final groups = <_InfoGroup>[];
+
+  // —— 视频流参数 ——
+  final video = <(String, String)>[];
+  final (w, h) = (vt.w ?? vp.w, vt.h ?? vp.h);
+  if (w != null && h != null && w > 0) video.add(('分辨率', '$w × $h'));
+  final rotate = vt.rotate ?? vp.rotate;
+  if (rotate != null && rotate > 0) video.add(('旋转', '$rotate°'));
+  final fps = vt.fps;
+  if (fps != null && fps > 0) video.add(('帧率', _fmtFps(fps)));
+  if (vt.codec?.isNotEmpty ?? false) video.add(('视频编码', vt.codec!));
+  final pixfmt = vp.pixelformat;
+  if (pixfmt != null && pixfmt != 'unknown') video.add(('像素格式', pixfmt));
+  final color = _colorLabel(vp);
+  if (color.isNotEmpty) video.add(('色域 / HDR', color));
+  final vbps = vt.bitrate;
+  if (vbps != null && vbps > 0) video.add(('视频码率', _fmtBitrate(vbps)));
+  if (video.isNotEmpty) groups.add(_InfoGroup('视频', video));
+
+  // —— 音频流参数 ——
+  final audio = <(String, String)>[];
+  if (at.codec?.isNotEmpty ?? false) audio.add(('音频编码', at.codec!));
+  final sampleRate = at.samplerate ?? ap.sampleRate;
+  if (sampleRate != null && sampleRate > 0) audio.add(('采样率', _fmtKhz(sampleRate)));
+  final chCount = at.channelscount ?? ap.channelCount;
+  final chLayout = at.channels ?? ap.channels;
+  if (chCount != null && chCount > 0) {
+    audio.add(('声道',
+        chLayout?.isEmpty == false ? '$chCount 声道（$chLayout）' : '$chCount 声道'));
+  }
+  final abps = at.bitrate;
+  if (abps != null && abps > 0) audio.add(('音频码率', _fmtBitrate(abps)));
+  if (audio.isNotEmpty) groups.add(_InfoGroup('音频', audio));
+
+  // —— 轨道 ——
+  final aTracks = _realTracks(st.tracks.audio, (t) => t.id);
+  final sTracks = _realTracks(st.tracks.subtitle, (t) => t.id);
+  groups.add(_InfoGroup('轨道', [
+    ('音轨',
+        aTracks.isEmpty ? '无' : '${aTracks.length} 条${_langSuffix(aTracks.map((t) => t.language))}'),
+    ('字幕',
+        sTracks.isEmpty ? '无' : '${sTracks.length} 条${_langSuffix(sTracks.map((t) => t.language))}'),
+  ]));
+
+  // —— 播放器 ——
+  final vo = await _mpvProp(player, 'current-vo');
+  final hwdec = await _mpvProp(player, 'hwdec-current');
+  final fileFormat = await _mpvProp(player, 'file-format');
+  final playerRows = <(String, String)>[
+    ('渲染器', vo?.isEmpty == false ? vo! : '默认'),
+    ('解码', _hwdecLabel(hwdec)),
+    ('超分档位', srMode == SrMode.off ? '关闭' : '${srMode.label}档'),
+  ];
+  if (qualityLabel.isNotEmpty) playerRows.add(('清晰度', qualityLabel));
+  groups.add(_InfoGroup('播放器', playerRows));
+
+  // —— 文件 ——
+  final file = <(String, String)>[];
+  if (fileFormat?.isNotEmpty ?? false) file.add(('容器格式', fileFormat!));
+  if (source is LocalPlayableSource) {
+    try {
+      final stat = await File(source.path).stat();
+      file.add(('大小', _fmtBytes(stat.size)));
+      file.add(('修改时间', _fmtDate(stat.modified)));
+    } catch (_) {
+      // 路径不可读（如 content:// 条目）时省略大小/时间行。
+    }
+  }
+  final dur = st.duration;
+  if (dur > Duration.zero) file.add(('时长', _fmtDuration(dur)));
+  if (file.isNotEmpty) groups.add(_InfoGroup('文件', file));
+
+  return groups;
+}
+
+/// 语言后缀：无有效语言返回空串，否则形如（chi、eng）。
+String _langSuffix(Iterable<String?> langs) {
+  final names =
+      langs.whereType<String>().where((s) => s.isNotEmpty).toSet().toList();
+  return names.isEmpty ? '' : '（${names.join('、')}）';
+}
+
+/// 色域/HDR 简述：PQ/HLG 直接判型，其余列出主色与 gamma。
+String _colorLabel(VideoParams vp) {
+  final primaries = vp.primaries;
+  final gamma = vp.gamma;
+  if (gamma == 'pq') return primaries == 'bt.2020' ? 'HDR10' : 'HDR10（PQ）';
+  if (gamma == 'arib-std-b67') return 'HLG';
+  final parts = [
+    if (primaries != null && primaries != 'unknown')
+      _primariesNames[primaries] ?? primaries,
+    if (gamma != null && gamma != 'unknown') _gammaNames[gamma] ?? gamma,
+  ];
+  return parts.join(' / ');
+}
+
+const _primariesNames = {
+  'bt.601': 'BT.601',
+  'bt.709': 'BT.709',
+  'bt.2020': 'BT.2020',
+  'dcip3-d65': 'DCI-P3',
+  'smpte2084': 'HDR10',
+  'arib-std-b67': 'HLG',
+};
+
+const _gammaNames = {
+  'srgb': 'sRGB',
+  'pq': 'PQ',
+  '2.2': 'gamma 2.2',
+  '2.4': 'gamma 2.4',
+};
+
+String _hwdecLabel(String? v) {
+  if (v == null || v.isEmpty || v == 'no' || v == 'disabled') return '软解';
+  return '硬解（$v）';
+}
+
+String _fmtBytes(int b) {
+  if (b >= 1 << 30) return '${(b / (1 << 30)).toStringAsFixed(2)} GB';
+  if (b >= 1 << 20) return '${(b / (1 << 20)).toStringAsFixed(2)} MB';
+  if (b >= 1 << 10) return '${(b / (1 << 10)).toStringAsFixed(1)} KB';
+  return '$b B';
+}
+
+String _fmtBitrate(int bps) {
+  if (bps >= 1000000) return '${(bps / 1000000).toStringAsFixed(2)} Mbps';
+  if (bps >= 1000) return '${(bps / 1000).toStringAsFixed(0)} kbps';
+  return '$bps bps';
+}
+
+String _fmtFps(double fps) {
+  var s = fps.toStringAsFixed(3);
+  while (s.endsWith('0')) {
+    s = s.substring(0, s.length - 1);
+  }
+  if (s.endsWith('.')) s = s.substring(0, s.length - 1);
+  return '$s fps';
+}
+
+String _fmtKhz(int hz) {
+  var s = (hz / 1000).toStringAsFixed(1);
+  if (s.endsWith('.0')) s = s.substring(0, s.length - 2);
+  return '$s kHz';
+}
+
+String _fmtDate(DateTime d) {
+  String two(int n) => n.toString().padLeft(2, '0');
+  return '${d.year}-${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}';
+}
+
+String _fmtDuration(Duration d) {
+  final s = d.inSeconds;
+  final h = s ~/ 3600, m = (s % 3600) ~/ 60, sec = s % 60;
+  String two(int n) => n.toString().padLeft(2, '0');
+  return h > 0 ? '$h:${two(m)}:${two(sec)}' : '${two(m)}:${two(sec)}';
 }
