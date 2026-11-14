@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:screen_brightness/screen_brightness.dart';
+import 'package:volume_controller/volume_controller.dart';
 
 import '../models.dart';
 import '../services/app_store.dart';
@@ -14,10 +16,14 @@ import '../services/netdisk/play_source.dart';
 import '../services/shader_service.dart';
 import '../state.dart';
 
+/// 竖滑手势类型：左 1/3 屏幕调亮度，右 1/3 调音量，中间不响应竖滑。
+enum _DragKind { brightness, volume }
+
 /// 视频播放页：media_kit(libmpv) + Anime4K/ArtCNN GLSL 超分多档热切换。
 /// 支持 [PlayableSource] 抽象：本地文件与百度网盘在线流统一打开；
 /// 在线流带清晰度切换（换 URL 重开 + seek）、HLS 分片扩展名自愈、
 /// 云端转码不可用时自动降级 dlink 原画（见 docs/网盘在线播放评估.md）。
+/// 手势：单击切换控制层，双击播放/暂停，左右竖滑调亮度/音量（带 HUD）。
 class PlayerPage extends ConsumerStatefulWidget {
   final PlayableSource source;
 
@@ -73,6 +79,23 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
   // 方向偏好循环：自动 → 横屏 → 竖屏。
   int _orientation = 0;
+
+  // —— 竖滑调亮度/音量 ——
+  _DragKind? _dragKind; // 进行中的竖滑类型（null = 无）
+  double _dragBase = 0; // 竖滑起点的亮度/音量
+  double _dragAccum = 0; // 竖滑累计位移（按屏高归一化）
+  double _brightness = 0.5; // 亮度/音量缓存，手势间保持连续
+  double _volume = 0.5;
+  bool _brightnessSupported = true; // 插件探测失败的平台禁用对应手势
+  bool _volumeSupported = true;
+  bool _brightnessAdjusted = false; // 本次播放页设置过应用亮度（退出时还原）
+  _DragKind? _hudKind; // HUD 最后展示的侧别（松手淡出期间保持）
+  bool _hudVisible = false;
+  Timer? _hudTimer;
+
+  // 双击播放/暂停的中心闪烁图标；null = 不显示。
+  bool? _playFlash;
+  Timer? _flashTimer;
 
   /// HLS 分片无扩展名的兼容档位（ffmpeg 9=extension_picky，旧版=allowed_extensions）。
   static const _lavfLadder = [
@@ -133,6 +156,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         _openFailure ??= '${e.prefix}: ${e.text}';
       }
     });
+    // 手势能力探测：读不到当前值说明平台未实现插件（如音量控制的桌面端），
+    // 静默禁用对应手势，避免播放中抛 MissingPluginException。
+    ScreenBrightness.instance.application.then((v) => _brightness = v,
+        onError: (_) => _brightnessSupported = false);
+    VolumeController.instance
+      ..showSystemUI = false // 音量 HUD 自绘，不叠加系统条
+      ..getVolume().then((v) => _volume = v,
+          onError: (_) => _volumeSupported = false);
     _open();
   }
 
@@ -406,6 +437,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     _tracksSub?.cancel();
     _hideTimer?.cancel();
     _gateTimer?.cancel();
+    _hudTimer?.cancel();
+    _flashTimer?.cancel();
+    // 应用级亮度挂在 Activity 窗口上，回到主界面不会自动消失，
+    // 退出播放页必须还原，避免视频库/文件页继承调暗后的亮度。
+    if (_brightnessAdjusted) {
+      ScreenBrightness.instance.resetApplicationScreenBrightness();
+    }
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     // 强制恢复竖屏：主界面（视频库/文件/网盘/我的）均为竖屏设计，
     // 不能依赖 '[]'(自动) 恢复——自动旋转关闭或模拟器无传感器时横屏会残留。
@@ -427,6 +465,73 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     });
   }
 
+  /// 竖滑起点分区：左 1/3 调亮度、右 1/3 调音量、中间不响应。
+  /// 起点值用同步缓存；随后异步读一次真实值兜底（系统侧可能改过），
+  /// 用户已拖动（_dragAccum != 0）则放弃刷新，防止 HUD 跳变。
+  void _onVerticalDragStart(DragStartDetails d) {
+    if (_locked) return;
+    final w = MediaQuery.of(context).size.width;
+    if (d.localPosition.dx <= w / 3 && _brightnessSupported) {
+      _dragKind = _DragKind.brightness;
+      _dragBase = _brightness;
+      ScreenBrightness.instance.application.then((v) {
+        if (_dragKind == _DragKind.brightness && _dragAccum == 0) {
+          _dragBase = v.clamp(0.05, 1.0);
+        }
+      }, onError: (_) {});
+    } else if (d.localPosition.dx >= w * 2 / 3 && _volumeSupported) {
+      _dragKind = _DragKind.volume;
+      _dragBase = _volume;
+      VolumeController.instance.getVolume().then((v) {
+        if (_dragKind == _DragKind.volume && _dragAccum == 0) _dragBase = v;
+      }, onError: (_) {});
+    } else {
+      _dragKind = null;
+      return;
+    }
+    _dragAccum = 0;
+    _hudKind = _dragKind;
+    _hudTimer?.cancel();
+    setState(() => _hudVisible = true);
+  }
+
+  void _onVerticalDragUpdate(DragUpdateDetails d) {
+    if (_dragKind == null) return;
+    // 上滑增大；一整个屏高 ≈ 全量程 0~1。
+    _dragAccum += -d.delta.dy / MediaQuery.of(context).size.height;
+    final raw = _dragBase + _dragAccum;
+    if (_dragKind == _DragKind.brightness) {
+      _brightness = raw.clamp(0.05, 1.0); // 0 会导致息屏，保底 5%
+      _brightnessAdjusted = true;
+      ScreenBrightness.instance.setApplicationScreenBrightness(_brightness);
+    } else {
+      _volume = raw.clamp(0.0, 1.0);
+      VolumeController.instance.setVolume(_volume);
+    }
+    setState(() {});
+  }
+
+  /// 松手/取消（被 arena 判给 Slider 等）后延迟淡出 HUD。
+  void _onVerticalDragEnd([DragEndDetails? _]) {
+    _dragKind = null;
+    _hudTimer?.cancel();
+    _hudTimer = Timer(const Duration(milliseconds: 700), () {
+      if (mounted) setState(() => _hudVisible = false);
+    });
+  }
+
+  /// 双击切换播放/暂停，中心闪一个大图标做反馈。
+  void _onDoubleTap() {
+    if (_locked) return;
+    final willPlay = !_player.state.playing;
+    _player.playOrPause();
+    _flashTimer?.cancel();
+    setState(() => _playFlash = willPlay);
+    _flashTimer = Timer(const Duration(milliseconds: 600), () {
+      if (mounted) setState(() => _playFlash = null);
+    });
+  }
+
   void _cycleOrientation() {
     _orientation = (_orientation + 1) % 3;
     switch (_orientation) {
@@ -445,6 +550,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   Future<void> _showSrSheet() async {
     await showModalBottomSheet<void>(
       context: context,
+      // 小屏上固定内容会超出默认 9/16 高度上限，允许弹层撑高并让列表滚动。
+      isScrollControlled: true,
       builder: (ctx) => Consumer(builder: (ctx, ref, _) {
         final mode = ref.watch(srModeProvider);
         return SafeArea(
@@ -464,20 +571,30 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                   style: TextStyle(fontSize: 12, color: Colors.grey),
                 ),
               ),
-              for (final m in SrMode.values)
-                RadioListTile<SrMode>(
-                  value: m,
-                  groupValue: mode,
-                  onChanged: (v) {
-                    if (v != null) {
-                      ref.read(srModeProvider.notifier).set(v);
-                      _applySr(v);
-                    }
-                  },
-                  title: Text(m == SrMode.off ? '关闭' : m.label),
-                  subtitle: Text(m.desc, style: const TextStyle(fontSize: 12)),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final m in SrMode.values)
+                        RadioListTile<SrMode>(
+                          value: m,
+                          groupValue: mode,
+                          onChanged: (v) {
+                            if (v != null) {
+                              ref.read(srModeProvider.notifier).set(v);
+                              _applySr(v);
+                            }
+                          },
+                          title: Text(m == SrMode.off ? '关闭' : m.label),
+                          subtitle:
+                              Text(m.desc, style: const TextStyle(fontSize: 12)),
+                        ),
+                      const SizedBox(height: 8),
+                    ],
+                  ),
                 ),
-              const SizedBox(height: 8),
+              ),
             ],
           ),
         );
@@ -518,10 +635,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                 ? Video(controller: _controller, controls: NoVideoControls)
                 : const CircularProgressIndicator(),
           ),
-          // 控制层。
+          // 控制层。手势：单击控制层开关、双击播放/暂停、左右竖滑亮度/音量。
+          // 与底部进度条靠手势竞技场仲裁：横向移动归 Slider，竖向归本层。
           Positioned.fill(
             child: GestureDetector(
               onTap: _toggleControls,
+              onDoubleTap: _onDoubleTap,
+              onVerticalDragStart: _onVerticalDragStart,
+              onVerticalDragUpdate: _onVerticalDragUpdate,
+              onVerticalDragEnd: _onVerticalDragEnd,
+              onVerticalDragCancel: _onVerticalDragEnd,
               behavior: HitTestBehavior.translucent,
               child: AnimatedOpacity(
                 opacity: _showControls && !_locked ? 1 : 0,
@@ -542,6 +665,47 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                 icon: const Icon(Icons.lock_open),
               ),
             ),
+          // 竖滑 HUD：显示在对应半区中心，松手 700ms 后淡出。
+          Positioned.fill(
+            child: IgnorePointer(
+              child: AnimatedOpacity(
+                opacity: _hudVisible ? 1 : 0,
+                duration: const Duration(milliseconds: 150),
+                child: Align(
+                  alignment: Alignment(
+                      _hudKind == _DragKind.brightness ? -2 / 3 : 2 / 3, 0),
+                  child: _hudKind == null
+                      ? const SizedBox.shrink()
+                      : _buildHudCard(_hudKind!),
+                ),
+              ),
+            ),
+          ),
+          // 双击播放/暂停的中心反馈图标。
+          Positioned.fill(
+            child: IgnorePointer(
+              child: Center(
+                child: AnimatedOpacity(
+                  opacity: _playFlash != null ? 1 : 0,
+                  duration: const Duration(milliseconds: 150),
+                  child: Container(
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.5),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      _playFlash == true
+                          ? Icons.play_arrow_rounded
+                          : Icons.pause_rounded,
+                      color: Colors.white,
+                      size: 44,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -647,6 +811,54 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           ),
         ),
       ],
+    );
+  }
+
+  /// 竖滑 HUD：图标 + 竖向进度条 + 百分比，贴对应半区中心。
+  Widget _buildHudCard(_DragKind kind) {
+    final value = kind == _DragKind.brightness ? _brightness : _volume;
+    final icon = kind == _DragKind.brightness
+        ? Icons.brightness_6_outlined
+        : value <= 0.02
+            ? Icons.volume_off
+            : value < 0.5
+                ? Icons.volume_down
+                : Icons.volume_up;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.65),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: Colors.white, size: 28),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(3),
+            child: SizedBox(
+              width: 6,
+              height: 130,
+              child: Stack(
+                alignment: Alignment.bottomCenter,
+                children: [
+                  Container(color: Colors.white24),
+                  FractionallySizedBox(
+                    heightFactor: value,
+                    child: Container(color: Colors.white),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            '${(value * 100).round()}%',
+            style: const TextStyle(color: Colors.white, fontSize: 12),
+          ),
+        ],
+      ),
     );
   }
 }
