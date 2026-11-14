@@ -25,6 +25,30 @@ class BaiduAuth {
 
   static bool get hasToken => (accessToken ?? '').isNotEmpty;
 
+  /// 是否已填入真实应用凭证（设置页填写或编译期注入，且非模板占位值）。
+  /// 占位值请求百度会被以 401 invalid_client 拒绝，提前拦截以给出可操作提示。
+  static bool get credentialsConfigured => BaiduConfig.credentialsConfigured;
+
+  /// 把百度鉴权失败（HTTP 状态 + 响应体）翻译成可操作的中文提示。
+  /// 纯函数，便于单测；401 / `invalid_client` 是未配置或凭证被拒的真实返回。
+  static String describeAuthFailure(int? status, Object? body) {
+    final err = body is Map ? (body['error'] as String?) : null;
+    final desc = body is Map ? (body['error_description'] as String?) : null;
+    final detail = [?err, ?desc].join('：');
+    if (status == 401 || err == 'invalid_client') {
+      return '应用凭证被百度拒绝（HTTP ${status ?? 401}'
+          '${detail.isEmpty ? '' : ' / $detail'}）。'
+          '请在「我的 → 百度网盘凭证」重新填写开放平台应用凭证页的 '
+          'AppKey/SecretKey，并确认包名与签名证书已在开放平台登记。';
+    }
+    return '网络请求失败（HTTP ${status ?? '无响应'}'
+        '${detail.isEmpty ? '' : ' / $detail'}）';
+  }
+
+  static Never _throwFriendly(DioException e) => throw BaiduAuthException(
+        describeAuthFailure(e.response?.statusCode, e.response?.data),
+      );
+
   /// token 是否可用（留 2 分钟提前量）。没有 token 时返回 false。
   static Future<bool> ensureValid() async {
     if (!hasToken) return false;
@@ -36,34 +60,72 @@ class BaiduAuth {
 
   /// 第一步：申请设备码。返回 demo 字段（device_code/user_code/verification_url 等）。
   static Future<Map<String, dynamic>> requestDeviceCode() async {
-    final r = await _dio.get<Map<String, dynamic>>(
-      'https://openapi.baidu.com/oauth/2.0/device/code',
-      queryParameters: {
-        'response_type': 'device_code',
-        'client_id': BaiduConfig.appKey,
-        'scope': 'basic,netdisk',
-      },
-    );
-    final data = r.data;
+    if (!credentialsConfigured) {
+      throw BaiduAuthException(
+        '未配置百度应用凭证：请到「我的 → 百度网盘凭证」填写开放平台'
+        '（pan.baidu.com/union）应用凭证页的 AppKey / SecretKey。',
+      );
+    }
+    final Map<String, dynamic>? data;
+    try {
+      final r = await _dio.get<Map<String, dynamic>>(
+        'https://openapi.baidu.com/oauth/2.0/device/code',
+        queryParameters: {
+          'response_type': 'device_code',
+          'client_id': BaiduConfig.appKey,
+          'scope': 'basic,netdisk',
+        },
+      );
+      data = r.data;
+    } on DioException catch (e) {
+      _throwFriendly(e);
+    }
     if (data == null || (data['device_code'] as String?)?.isEmpty != false) {
-      throw BaiduAuthException('获取设备码失败：${r.data}');
+      throw BaiduAuthException('获取设备码失败：$data');
     }
     return data;
+  }
+
+  /// 用指定 AppKey 探测凭证是否被百度接受（只索取设备码，不完成授权）。
+  /// 返回 null 表示有效；否则返回可读的失败原因（不抛异常，供设置页直接展示）。
+  static Future<String?> probeAppKey(String appKey) async {
+    final k = appKey.trim();
+    if (k.isEmpty) return '请先填写 AppKey';
+    try {
+      final r = await _dio.get<Map<String, dynamic>>(
+        'https://openapi.baidu.com/oauth/2.0/device/code',
+        queryParameters: {
+          'response_type': 'device_code',
+          'client_id': k,
+          'scope': 'basic,netdisk',
+        },
+      );
+      final ok = (r.data?['device_code'] as String?)?.isNotEmpty == true;
+      return ok ? null : '意外的响应：${r.data}';
+    } on DioException catch (e) {
+      return describeAuthFailure(e.response?.statusCode, e.response?.data);
+    }
   }
 
   /// 第二步轮询：用 device_code 换 token。
   /// 返回 'pending'（继续轮询）/ 'ok'（成功）/ 'expired'（设备码过期）/ 'slowdown'。
   static Future<String> pollDeviceToken(String deviceCode) async {
-    final r = await _dio.get<Map<String, dynamic>>(
-      'https://openapi.baidu.com/oauth/2.0/token',
-      queryParameters: {
-        'grant_type': 'device_token',
-        'client_id': BaiduConfig.appKey,
-        'client_secret': BaiduConfig.secretKey,
-        'code': deviceCode,
-      },
-    );
-    final data = r.data ?? const {};
+    final Map<String, dynamic>? payload;
+    try {
+      final r = await _dio.get<Map<String, dynamic>>(
+        'https://openapi.baidu.com/oauth/2.0/token',
+        queryParameters: {
+          'grant_type': 'device_token',
+          'client_id': BaiduConfig.appKey,
+          'client_secret': BaiduConfig.secretKey,
+          'code': deviceCode,
+        },
+      );
+      payload = r.data;
+    } on DioException catch (e) {
+      _throwFriendly(e);
+    }
+    final data = payload ?? const {};
     final access = data['access_token'] as String?;
     if (access != null && access.isNotEmpty) {
       await _store(data);

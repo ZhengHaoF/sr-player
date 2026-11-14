@@ -7,9 +7,11 @@ import '../models.dart';
 import '../services/app_store.dart';
 import '../services/fs.dart';
 import '../services/netdisk/baidu_auth.dart';
+import '../services/netdisk/baidu_config.dart';
 import '../services/netdisk/play_source.dart';
 import '../state.dart';
 import 'files_page.dart';
+import 'netdisk_credentials_page.dart';
 import 'player_page.dart';
 
 /// 我的 Tab：播放记录 / 收藏文件夹 / 设置。
@@ -77,6 +79,24 @@ class _MinePageState extends ConsumerState<MinePage>
             ThumbCache.clearMemory();
             ScaffoldMessenger.of(context)
                 .showSnackBar(const SnackBar(content: Text('缩略图缓存已清除')));
+          },
+        ),
+        const _SectionHeader('网盘'),
+        ListTile(
+          leading: const Icon(Icons.vpn_key_outlined),
+          title: const Text('百度网盘凭证'),
+          subtitle: Text(
+            BaiduConfig.hasUserCredentials
+                ? '已配置（来源：${BaiduConfig.sourceLabel}）'
+                : '未配置：网盘登录需要开放平台 AppKey / SecretKey',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () async {
+            await Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const NetdiskCredentialsPage()));
+            if (mounted) setState(() {});
           },
         ),
         const _SectionHeader('关于'),

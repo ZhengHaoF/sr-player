@@ -14,6 +14,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # baidu_secrets.dart 被 gitignore（含真实凭证），CI 无此文件会导致编译失败。
+      # 无真实凭证时用示例占位文件保证可编译（网盘登录不可用，其余功能正常）。
+      - name: Seed netdisk credentials
+        run: |
+          if [ ! -f lib/services/netdisk/baidu_secrets.dart ]; then
+            cp lib/services/netdisk/baidu_secrets_example.dart \
+               lib/services/netdisk/baidu_secrets.dart
+            echo "::notice::使用示例占位凭证构建，网盘登录不可用"
+          fi
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

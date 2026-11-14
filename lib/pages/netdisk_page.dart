@@ -7,8 +7,10 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../services/netdisk/baidu_api.dart';
 import '../services/netdisk/baidu_auth.dart';
+import '../services/netdisk/baidu_config.dart';
 import '../services/netdisk/play_source.dart';
 import '../state.dart';
+import 'netdisk_credentials_page.dart';
 import 'player_page.dart';
 
 /// 网盘 Tab：百度网盘登录 + 云端目录浏览 + 在线播放。
@@ -33,22 +35,36 @@ class _NetdiskPageState extends ConsumerState<NetdiskPage> {
 // 登录视图
 // ---------------------------------------------------------------------------
 
-class _LoginView extends StatelessWidget {
+class _LoginView extends StatefulWidget {
   const _LoginView();
 
-  Future<void> _startLogin(BuildContext context) async {
-    Navigator.of(context).push(MaterialPageRoute(
+  @override
+  State<_LoginView> createState() => _LoginViewState();
+}
+
+class _LoginViewState extends State<_LoginView> {
+  Future<void> _startLogin() async {
+    await Navigator.of(context).push(MaterialPageRoute(
       fullscreenDialog: true,
       builder: (_) => const _DeviceCodePage(),
     ));
   }
 
+  /// 先让用户把凭证填上，否则授权必然 401。
+  Future<void> _openCredentials() async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => const NetdiskCredentialsPage(),
+    ));
+    if (mounted) setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
+    final ready = BaiduConfig.credentialsConfigured;
     return Scaffold(
       appBar: AppBar(title: const Text('网盘')),
       body: Center(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(32),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -66,8 +82,34 @@ class _LoginView extends StatelessWidget {
                 style: TextStyle(color: Colors.grey[600], height: 1.5),
               ),
               const SizedBox(height: 24),
+              if (!ready) ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Row(children: [
+                    Icon(Icons.info_outline, size: 18, color: Colors.orange),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '尚未配置应用凭证（AppKey / SecretKey），直接授权会被百度拒绝。',
+                        style: TextStyle(fontSize: 12, height: 1.4),
+                      ),
+                    ),
+                  ]),
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: _openCredentials,
+                  icon: const Icon(Icons.vpn_key_outlined),
+                  label: const Text('填写应用凭证'),
+                ),
+                const SizedBox(height: 12),
+              ],
               FilledButton.icon(
-                onPressed: () => _startLogin(context),
+                onPressed: _startLogin,
                 icon: const Icon(Icons.cloud_sync_outlined),
                 label: const Text('开始授权'),
               ),
