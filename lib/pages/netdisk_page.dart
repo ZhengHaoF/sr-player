@@ -35,19 +35,24 @@ class _NetdiskPageState extends ConsumerState<NetdiskPage> {
 // 登录视图
 // ---------------------------------------------------------------------------
 
-class _LoginView extends StatefulWidget {
+class _LoginView extends ConsumerStatefulWidget {
   const _LoginView();
 
   @override
-  State<_LoginView> createState() => _LoginViewState();
+  ConsumerState<_LoginView> createState() => _LoginViewState();
 }
 
-class _LoginViewState extends State<_LoginView> {
+class _LoginViewState extends ConsumerState<_LoginView> {
   Future<void> _startLogin() async {
-    await Navigator.of(context).push(MaterialPageRoute(
+    final ok = await Navigator.of(context).push<bool>(MaterialPageRoute(
       fullscreenDialog: true,
       builder: (_) => const _DeviceCodePage(),
     ));
+    // 授权页 pop(true) 表示 token 已入库；刷新全局登录态，
+    // NetdiskPage 侦听到后自动切换到目录浏览器。
+    if (ok == true && mounted) {
+      await ref.read(cloudLoggedInProvider.notifier).refresh();
+    }
   }
 
   /// 先让用户把凭证填上，否则授权必然 401。
