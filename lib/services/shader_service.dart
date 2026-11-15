@@ -49,9 +49,7 @@ class ShaderService {
   /// 注意：media_kit 在 Android 把渲染面固定为视频原始分辨率，官方版的
   /// `//!WHEN 输出>1.3x源` 守卫永不满足，因此打包的是去掉守卫的版本——
   /// CNN 在源分辨率运行，去噪+锐化生效；真正放大需待渲染面尺寸修复。
-  static const List<String> experimentalChain = [
-    'ArtCNN_C4F32_DS.glsl',
-  ];
+  static const List<String> experimentalChain = ['ArtCNN_C4F32_DS.glsl'];
 
   /// 当前打包的 libmpv 是否含 gpu-next(libplacebo) 渲染器。
   ///
@@ -63,11 +61,11 @@ class ShaderService {
   static const bool gpuNextAvailable = true;
 
   static List<String> chainFor(SrMode mode) => switch (mode) {
-        SrMode.off => const [],
-        SrMode.performance => performanceChain,
-        SrMode.quality => qualityChain,
-        SrMode.experimental => experimentalChain,
-      };
+    SrMode.off => const [],
+    SrMode.performance => performanceChain,
+    SrMode.quality => qualityChain,
+    SrMode.experimental => experimentalChain,
+  };
 
   /// 解析某档位全部着色器的本地路径（保证已落地到缓存目录）。
   static Future<List<String>> resolveChain(SrMode mode) async {

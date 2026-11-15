@@ -6,21 +6,19 @@ enum SrMode { off, performance, quality, experimental }
 
 extension SrModeLabel on SrMode {
   String get label => switch (this) {
-        SrMode.off => '关闭',
-        SrMode.performance => '性能',
-        SrMode.quality => '质量',
-        SrMode.experimental => '实验',
-      };
+    SrMode.off => '关闭',
+    SrMode.performance => '性能',
+    SrMode.quality => '质量',
+    SrMode.experimental => '实验',
+  };
 
   String get desc => switch (this) {
-        SrMode.off => '不挂载任何着色器，功耗最低。',
-        SrMode.performance =>
-          'Anime4K CNN S/M 档，兼顾流畅与画质，大多数设备推荐。',
-        SrMode.quality =>
-          'Anime4K CNN VL 档，画质最佳，对 GPU 要求较高，卡顿请切回性能档。',
-        SrMode.experimental =>
-          'ArtCNN C4F32 DS（gpu-next 渲染器，CNN 去噪锐化），实验性，卡顿请切回性能档。',
-      };
+    SrMode.off => '不挂载任何着色器，功耗最低。',
+    SrMode.performance => 'Anime4K CNN S/M 档，兼顾流畅与画质，大多数设备推荐。',
+    SrMode.quality => 'Anime4K CNN VL 档，画质最佳，对 GPU 要求较高，卡顿请切回性能档。',
+    SrMode.experimental =>
+      'ArtCNN C4F32 DS（gpu-next 渲染器，CNN 去噪锐化），实验性，卡顿请切回性能档。',
+  };
 }
 
 /// 一个本地视频条目（来自 MediaStore 或文件浏览）。
@@ -48,15 +46,15 @@ class VideoItem {
   });
 
   factory VideoItem.fromMap(Map<Object?, Object?> m) => VideoItem(
-        path: (m['path'] as String?) ?? '',
-        name: (m['name'] as String?) ?? '',
-        durationMs: (m['durationMs'] as num?)?.toInt() ?? 0,
-        sizeBytes: (m['sizeBytes'] as num?)?.toInt() ?? 0,
-        modifiedSec: (m['modifiedSec'] as num?)?.toInt() ?? 0,
-        width: (m['width'] as num?)?.toInt() ?? 0,
-        height: (m['height'] as num?)?.toInt() ?? 0,
-        contentUri: (m['contentUri'] as String?) ?? '',
-      );
+    path: (m['path'] as String?) ?? '',
+    name: (m['name'] as String?) ?? '',
+    durationMs: (m['durationMs'] as num?)?.toInt() ?? 0,
+    sizeBytes: (m['sizeBytes'] as num?)?.toInt() ?? 0,
+    modifiedSec: (m['modifiedSec'] as num?)?.toInt() ?? 0,
+    width: (m['width'] as num?)?.toInt() ?? 0,
+    height: (m['height'] as num?)?.toInt() ?? 0,
+    contentUri: (m['contentUri'] as String?) ?? '',
+  );
 
   /// 所在目录（不含末尾斜杠）。
   String get folder {
@@ -85,8 +83,22 @@ class VideoItem {
 
 /// 支持的视频扩展名。
 const videoExtensions = {
-  'mp4', 'mkv', 'avi', 'mov', 'flv', 'ts', 'webm', 'wmv', 'm4v', '3gp',
-  'mpg', 'mpeg', 'rmvb', 'vob', 'm2ts', 'ogv',
+  'mp4',
+  'mkv',
+  'avi',
+  'mov',
+  'flv',
+  'ts',
+  'webm',
+  'wmv',
+  'm4v',
+  '3gp',
+  'mpg',
+  'mpeg',
+  'rmvb',
+  'vob',
+  'm2ts',
+  'ogv',
 };
 
 bool isVideoPath(String path) {

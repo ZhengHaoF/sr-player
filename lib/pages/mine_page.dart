@@ -39,16 +39,20 @@ class _MinePageState extends ConsumerState<MinePage>
           leading: const Icon(Icons.history),
           title: const Text('播放记录'),
           trailing: const Icon(Icons.chevron_right),
-          onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const HistoryPage())),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const HistoryPage()),
+          ),
         ),
         ListTile(
           leading: const Icon(Icons.star_border),
           title: const Text('收藏的文件夹'),
           subtitle: Text('${AppStore.favorites.length} 个'),
           trailing: const Icon(Icons.chevron_right),
-          onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const FavoritesPage())),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const FavoritesPage()),
+          ),
         ),
         const _SectionHeader('画面'),
         for (final m in SrMode.values)
@@ -77,8 +81,9 @@ class _MinePageState extends ConsumerState<MinePage>
           title: const Text('清除缩略图缓存'),
           onTap: () {
             ThumbCache.clearMemory();
-            ScaffoldMessenger.of(context)
-                .showSnackBar(const SnackBar(content: Text('缩略图缓存已清除')));
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('缩略图缓存已清除')));
           },
         ),
         const _SectionHeader('网盘'),
@@ -94,8 +99,10 @@ class _MinePageState extends ConsumerState<MinePage>
           ),
           trailing: const Icon(Icons.chevron_right),
           onTap: () async {
-            await Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const NetdiskCredentialsPage()));
+            await Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const NetdiskCredentialsPage()),
+            );
             if (mounted) setState(() {});
           },
         ),
@@ -103,7 +110,9 @@ class _MinePageState extends ConsumerState<MinePage>
         const ListTile(
           leading: Icon(Icons.info_outline),
           title: Text('SR Player'),
-          subtitle: Text('Flutter + media_kit(libmpv) + Anime4K GLSL\n超分辨率着色器遵循 MIT / Unlicense 许可。'),
+          subtitle: Text(
+            'Flutter + media_kit(libmpv) + Anime4K GLSL\n超分辨率着色器遵循 MIT / Unlicense 许可。',
+          ),
           isThreeLine: true,
         ),
         const SizedBox(height: 24),
@@ -120,9 +129,14 @@ class _SectionHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-      child: Text(text,
-          style: TextStyle(
-              fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey[600])),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+          color: Colors.grey[600],
+        ),
+      ),
     );
   }
 }
@@ -160,37 +174,53 @@ class HistoryPage extends StatelessWidget {
                 final name = (e['name'] as String?) ?? path;
                 final posMs = (e['pos'] as num?)?.toInt() ?? 0;
                 final durMs = (e['dur'] as num?)?.toInt() ?? 0;
-                final pct = durMs > 0 ? (posMs / durMs * 100).clamp(0, 100).toStringAsFixed(0) : '0';
+                final pct = durMs > 0
+                    ? (posMs / durMs * 100).clamp(0, 100).toStringAsFixed(0)
+                    : '0';
                 final updated = (e['updated'] as num?)?.toInt() ?? 0;
                 final dt = DateTime.fromMillisecondsSinceEpoch(updated);
                 return ListTile(
                   leading: const Icon(Icons.play_circle_outline, size: 36),
-                  title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  subtitle: Text('看到 $pct% · ${dt.month}/${dt.day} ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}'),
+                  title: Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Text(
+                    '看到 $pct% · ${dt.month}/${dt.day} ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}',
+                  ),
                   onTap: () {
                     // 云盘条目（baidu:// 前缀）在线播放；本地条目先校验存在。
                     if (path.startsWith('baidu://')) {
                       if (!BaiduAuth.hasToken) {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                            content: Text('网盘登录已过期，请到「网盘」页重新授权')));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('网盘登录已过期，请到「网盘」页重新授权')),
+                        );
                         return;
                       }
                       final cloudPath = path.substring('baidu://'.length);
                       Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => PlayerPage(
-                                  source: BaiduPlayableSource(
-                                      cloudPath: cloudPath, title: name))));
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => PlayerPage(
+                            source: BaiduPlayableSource(
+                              cloudPath: cloudPath,
+                              title: name,
+                            ),
+                          ),
+                        ),
+                      );
                     } else if (File(path).existsSync()) {
                       Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) =>
-                                  PlayerPage.local(path, title: name)));
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => PlayerPage.local(path, title: name),
+                        ),
+                      );
                     } else {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('文件不存在')));
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(const SnackBar(content: Text('文件不存在')));
                     }
                   },
                   onLongPress: () async {
@@ -223,12 +253,19 @@ class FavoritesPage extends StatelessWidget {
                 return ListTile(
                   leading: const Icon(Icons.folder, color: Colors.amber),
                   title: Text(FsService.fileNameOf(f)),
-                  subtitle: Text(f, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  subtitle: Text(
+                    f,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () {
-                    Navigator.push(context, MaterialPageRoute(
-                      builder: (_) => FilesPage(initialPath: f),
-                    ));
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => FilesPage(initialPath: f),
+                      ),
+                    );
                   },
                 );
               },
