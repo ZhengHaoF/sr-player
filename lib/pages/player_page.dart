@@ -955,6 +955,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                   // 倍速（跨视频/会话持久化，打开媒体时恢复）。
                   PopupMenuButton<double>(
                     tooltip: '倍速',
+                    icon: const Icon(Icons.speed, color: Colors.white),
                     onSelected: (s) {
                       ref.read(playbackRateProvider.notifier).set(s);
                       _player.setRate(s);
