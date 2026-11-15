@@ -8,6 +8,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import 'package:volume_controller/volume_controller.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../models.dart';
 import '../services/app_store.dart';
@@ -52,6 +53,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   Timer? _hideTimer;
   StreamSubscription? _posSub;
   StreamSubscription? _logSub;
+
+  /// 桌面端窗口全屏状态（移动端本就全屏，恒为 false）。
+  bool _isFullscreen = false;
 
   /// 当前生效的 mpv vo。initState 按持久化档位登记（经 Android 控制器配置，
   /// 首帧加载时由控制器统一写入 mpv），播放中切档由 [_applySr] 运行时接管。
@@ -313,6 +317,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         return;
       }
       // start 已让 mpv 在加载期定位；播放起来后校验到位，未到位则直 seek 补偿。
+      // 每个视频都新建 Player 实例，持久化倍速必须在打开时重设。
+      await _player.setRate(ref.read(playbackRateProvider));
       await _player.play();
       // 轨道已确认、play 已发起：mpv 已在出流（音频/进度先走），此时就应展示
       // 画面。续播校验与 SR 挂载是补偿/配置性质，转后台跑，不再以固定延迟
@@ -458,6 +464,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     }
   }
 
+  /// 桌面端窗口全屏切换。移动端本就全屏，入口都不显示。
+  Future<void> _toggleFullscreen() async {
+    if (Platform.isAndroid || Platform.isIOS) return;
+    final next = !_isFullscreen;
+    await windowManager.setFullScreen(next);
+    if (mounted) setState(() => _isFullscreen = next);
+  }
+
   /// 热切换 mpv vo。预编译 libmpv 可能不含 gpu-next（media-kit v1.1.7 实测缺失），
   /// 盲切会让视频输出初始化失败（画面卡死、音频继续），因此切换后监听一小段
   /// 时间的 vo fatal 日志，出错立即回退 gpu 并返回 false。成功时更新 _vo。
@@ -510,6 +524,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     // 退出播放页必须还原，避免视频库/文件页继承调暗后的亮度。
     if (_brightnessAdjusted) {
       ScreenBrightness.instance.resetApplicationScreenBrightness();
+    }
+    // 播放页被退出时还原桌面端窗口全屏，避免主界面残留无边框全屏。
+    if (_isFullscreen) {
+      windowManager.setFullScreen(false);
     }
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     // 强制恢复竖屏：主界面（视频库/文件/网盘/我的）均为竖屏设计，
@@ -764,89 +782,103 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       );
     }
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          Center(
-            child: _ready
-                ? Video(controller: _controller, controls: NoVideoControls)
-                : const CircularProgressIndicator(),
-          ),
-          // 控制层。手势：单击控制层开关、双击播放/暂停、左右竖滑亮度/音量。
-          // 与底部进度条靠手势竞技场仲裁：横向移动归 Slider，竖向归本层。
-          Positioned.fill(
-            child: GestureDetector(
-              onTap: _toggleControls,
-              onDoubleTap: _onDoubleTap,
-              onVerticalDragStart: _onVerticalDragStart,
-              onVerticalDragUpdate: _onVerticalDragUpdate,
-              onVerticalDragEnd: _onVerticalDragEnd,
-              onVerticalDragCancel: _onVerticalDragEnd,
-              behavior: HitTestBehavior.translucent,
-              child: AnimatedOpacity(
-                opacity: _showControls && !_locked ? 1 : 0,
-                duration: const Duration(milliseconds: 200),
+    // 桌面端快捷键：F11 切换全屏，Esc 退出全屏。
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.f11): _toggleFullscreen,
+        const SingleActivator(LogicalKeyboardKey.escape): () {
+          if (_isFullscreen) {
+            _toggleFullscreen();
+          }
+        },
+      },
+      child: Focus(
+        autofocus: true,
+        child: Scaffold(
+          backgroundColor: Colors.black,
+          body: Stack(
+            children: [
+              Center(
+                child: _ready
+                    ? Video(controller: _controller, controls: NoVideoControls)
+                    : const CircularProgressIndicator(),
+              ),
+              // 控制层。手势：单击控制层开关、双击播放/暂停、左右竖滑亮度/音量。
+              // 与底部进度条靠手势竞技场仲裁：横向移动归 Slider，竖向归本层。
+              Positioned.fill(
+                child: GestureDetector(
+                  onTap: _toggleControls,
+                  onDoubleTap: _onDoubleTap,
+                  onVerticalDragStart: _onVerticalDragStart,
+                  onVerticalDragUpdate: _onVerticalDragUpdate,
+                  onVerticalDragEnd: _onVerticalDragEnd,
+                  onVerticalDragCancel: _onVerticalDragEnd,
+                  behavior: HitTestBehavior.translucent,
+                  child: AnimatedOpacity(
+                    opacity: _showControls && !_locked ? 1 : 0,
+                    duration: const Duration(milliseconds: 200),
+                    child: IgnorePointer(
+                      ignoring: !_showControls || _locked,
+                      child: _buildControls(),
+                    ),
+                  ),
+                ),
+              ),
+              if (_locked)
+                Positioned(
+                  right: 16,
+                  bottom: 16,
+                  child: IconButton.filledTonal(
+                    onPressed: () => setState(() => _locked = false),
+                    icon: const Icon(Icons.lock_open),
+                  ),
+                ),
+              // 竖滑 HUD：显示在对应半区中心，松手 700ms 后淡出。
+              Positioned.fill(
                 child: IgnorePointer(
-                  ignoring: !_showControls || _locked,
-                  child: _buildControls(),
-                ),
-              ),
-            ),
-          ),
-          if (_locked)
-            Positioned(
-              right: 16,
-              bottom: 16,
-              child: IconButton.filledTonal(
-                onPressed: () => setState(() => _locked = false),
-                icon: const Icon(Icons.lock_open),
-              ),
-            ),
-          // 竖滑 HUD：显示在对应半区中心，松手 700ms 后淡出。
-          Positioned.fill(
-            child: IgnorePointer(
-              child: AnimatedOpacity(
-                opacity: _hudVisible ? 1 : 0,
-                duration: const Duration(milliseconds: 150),
-                child: Align(
-                  alignment: Alignment(
-                    _hudKind == _DragKind.brightness ? -2 / 3 : 2 / 3,
-                    0,
-                  ),
-                  child: _hudKind == null
-                      ? const SizedBox.shrink()
-                      : _buildHudCard(_hudKind!),
-                ),
-              ),
-            ),
-          ),
-          // 双击播放/暂停的中心反馈图标。
-          Positioned.fill(
-            child: IgnorePointer(
-              child: Center(
-                child: AnimatedOpacity(
-                  opacity: _playFlash != null ? 1 : 0,
-                  duration: const Duration(milliseconds: 150),
-                  child: Container(
-                    padding: const EdgeInsets.all(18),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.5),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      _playFlash == true
-                          ? Icons.play_arrow_rounded
-                          : Icons.pause_rounded,
-                      color: Colors.white,
-                      size: 44,
+                  child: AnimatedOpacity(
+                    opacity: _hudVisible ? 1 : 0,
+                    duration: const Duration(milliseconds: 150),
+                    child: Align(
+                      alignment: Alignment(
+                        _hudKind == _DragKind.brightness ? -2 / 3 : 2 / 3,
+                        0,
+                      ),
+                      child: _hudKind == null
+                          ? const SizedBox.shrink()
+                          : _buildHudCard(_hudKind!),
                     ),
                   ),
                 ),
               ),
-            ),
+              // 双击播放/暂停的中心反馈图标。
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: Center(
+                    child: AnimatedOpacity(
+                      opacity: _playFlash != null ? 1 : 0,
+                      duration: const Duration(milliseconds: 150),
+                      child: Container(
+                        padding: const EdgeInsets.all(18),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.5),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          _playFlash == true
+                              ? Icons.play_arrow_rounded
+                              : Icons.pause_rounded,
+                          color: Colors.white,
+                          size: 44,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -877,6 +909,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                 onPressed: _showInfoSheet,
                 icon: const Icon(Icons.info_outline, color: Colors.white),
               ),
+              // 桌面端全屏切换；移动端本就全屏，不显示入口。
+              if (!Platform.isAndroid && !Platform.isIOS)
+                IconButton(
+                  tooltip: _isFullscreen ? '退出全屏' : '全屏',
+                  onPressed: _toggleFullscreen,
+                  icon: Icon(
+                    _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                    color: Colors.white,
+                  ),
+                ),
               const SizedBox(width: 8),
             ],
           ),
@@ -910,14 +952,20 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                     tooltip: '锁定控制',
                   ),
                   const Spacer(),
-                  // 倍速。
+                  // 倍速（跨视频/会话持久化，打开媒体时恢复）。
                   PopupMenuButton<double>(
                     tooltip: '倍速',
-                    onSelected: (s) => _player.setRate(s),
-                    icon: const Icon(Icons.speed, color: Colors.white),
+                    onSelected: (s) {
+                      ref.read(playbackRateProvider.notifier).set(s);
+                      _player.setRate(s);
+                    },
                     itemBuilder: (_) => [
                       for (final v in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0])
-                        PopupMenuItem(value: v, child: Text('$v x')),
+                        CheckedPopupMenuItem(
+                          value: v,
+                          checked: v == ref.read(playbackRateProvider),
+                          child: Text('$v x'),
+                        ),
                     ],
                   ),
                   // 清晰度（仅在线源显示）。

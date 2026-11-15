@@ -20,6 +20,21 @@ final srModeProvider = NotifierProvider<SrModeController, SrMode>(
   SrModeController.new,
 );
 
+/// 播放倍速全局状态：跨视频、跨会话持久化；播放器页打开媒体时恢复。
+class PlaybackRateController extends Notifier<double> {
+  @override
+  double build() => AppStore.playbackRate;
+
+  Future<void> set(double rate) async {
+    await AppStore.setPlaybackRate(rate);
+    state = rate;
+  }
+}
+
+final playbackRateProvider = NotifierProvider<PlaybackRateController, double>(
+  PlaybackRateController.new,
+);
+
 /// 目录树当前路径：文件页与"收藏跳转"共享。
 class CurrentPathController extends Notifier<String> {
   @override

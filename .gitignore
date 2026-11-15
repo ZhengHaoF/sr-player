@@ -63,3 +63,4 @@ devtools_options.yaml
 
 # 其他 AI 的独立试验项目不入库
 gpu_next_demo/
+*.zip

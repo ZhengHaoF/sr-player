@@ -26,6 +26,12 @@ class AppStore {
 
   static Future<void> setSrMode(SrMode m) => _p.setString('sr_mode', m.name);
 
+  // ---------- 播放倍速 ----------
+
+  static double get playbackRate => _p.getDouble('playback_rate') ?? 1.0;
+  static Future<void> setPlaybackRate(double v) =>
+      _p.setDouble('playback_rate', v);
+
   // ---------- 偏好 ----------
 
   static bool get showHidden => _p.getBool('show_hidden') ?? false;
