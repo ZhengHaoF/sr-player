@@ -1,14 +1,17 @@
 /// 数据模型与通用工具。
 library;
 
+import 'dart:io';
+
 /// 超分辨率档位。
-enum SrMode { off, performance, quality, experimental }
+enum SrMode { off, performance, quality, ultra, experimental }
 
 extension SrModeLabel on SrMode {
   String get label => switch (this) {
     SrMode.off => '关闭',
     SrMode.performance => '性能',
     SrMode.quality => '质量',
+    SrMode.ultra => '极致',
     SrMode.experimental => '实验',
   };
 
@@ -16,8 +19,17 @@ extension SrModeLabel on SrMode {
     SrMode.off => '不挂载任何着色器，功耗最低。',
     SrMode.performance => 'Anime4K CNN S/M 档，兼顾流畅与画质，大多数设备推荐。',
     SrMode.quality => 'Anime4K CNN VL 档，画质最佳，对 GPU 要求较高，卡顿请切回性能档。',
+    SrMode.ultra => 'Anime4K VL 全链 + 二段 Restore 收尾，PC 端专属，GPU 负载最高的常规档。',
     SrMode.experimental =>
       'ArtCNN C4F32 DS（gpu-next 渲染器，CNN 去噪锐化），实验性，卡顿请切回性能档。',
+  };
+
+  /// 档位是否在当前平台展示：实验档依赖 gpu-next，仅 Android（wid 嵌入可换
+  /// vo）；极致档为 PC 端专属（性能冗余大）；其余全平台。
+  bool get platformAvailable => switch (this) {
+    SrMode.experimental => Platform.isAndroid,
+    SrMode.ultra => !Platform.isAndroid,
+    _ => true,
   };
 }
 

@@ -55,17 +55,19 @@ class _MinePageState extends ConsumerState<MinePage>
           ),
         ),
         const _SectionHeader('画面'),
+        // 平台专属档位过滤：实验档仅 Android，极致档仅桌面端。
         for (final m in SrMode.values)
-          RadioListTile<SrMode>(
-            value: m,
-            groupValue: srMode,
-            onChanged: (v) {
-              if (v != null) ref.read(srModeProvider.notifier).set(v);
-            },
-            title: Text(m == SrMode.off ? '关闭超分辨率' : '超分辨率：${m.label}'),
-            subtitle: Text(m.desc, style: const TextStyle(fontSize: 12)),
-            secondary: const Icon(Icons.auto_awesome_outlined),
-          ),
+          if (m.platformAvailable)
+            RadioListTile<SrMode>(
+              value: m,
+              groupValue: srMode,
+              onChanged: (v) {
+                if (v != null) ref.read(srModeProvider.notifier).set(v);
+              },
+              title: Text(m == SrMode.off ? '关闭超分辨率' : '超分辨率：${m.label}'),
+              subtitle: Text(m.desc, style: const TextStyle(fontSize: 12)),
+              secondary: const Icon(Icons.auto_awesome_outlined),
+            ),
         const _SectionHeader('文件'),
         SwitchListTile(
           secondary: const Icon(Icons.visibility_outlined),

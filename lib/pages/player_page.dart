@@ -360,6 +360,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     if (platform is NativePlayer) {
       await platform.setProperty('start', 'none'); // 清理，避免影响后续打开
     }
+    // 桌面端画质增强：media_kit 为照顾移动端默认关闭的高质量缩放/去带，
+    // 在 PC GPU 上成本极低，打开媒体时恢复为 mpv 官方推荐值。Android 不动。
+    if (platform is NativePlayer && !Platform.isAndroid) {
+      for (final entry in const {
+        'correct-downscaling': 'yes',
+        'linear-downscaling': 'yes',
+        'sigmoid-upscaling': 'yes',
+        'deband': 'yes',
+      }.entries) {
+        await platform.setProperty(entry.key, entry.value);
+      }
+    }
     // 应用当前 SR 档位。
     await _applySr(srMode, notify: false);
   }
@@ -664,9 +676,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // 桌面端内嵌渲染（render API）不含 gpu-next，实验档不展示。
+                        // 平台专属档位过滤：实验档仅 Android，极致档仅桌面端。
                         for (final m in SrMode.values)
-                          if (m != SrMode.experimental || Platform.isAndroid)
+                          if (m.platformAvailable)
                             RadioListTile<SrMode>(
                               value: m,
                               groupValue: mode,
