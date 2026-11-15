@@ -114,17 +114,17 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     super.initState();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _player = Player();
-    // 持久化为实验档时走创建时路径挂 gpu-next（Android 控制器会用此 vo
-    // 覆盖 PlayerConfiguration，见 VideoControllerConfiguration 注释）；
-    // 其余档位用默认 gpu。播放中切换档位由 _applySr 运行时处理。
+    // vo 覆盖仅限 Android：Android 走 wid/surface 嵌入，覆盖 vo 换取超分档位。
+    // 桌面端（Windows/Linux/macOS）内嵌渲染走 render API，要求 vo=libmpv
+    // （NativeVideoController 的默认值）——覆盖成 gpu/gpu-next 会让 mpv 自建
+    // 窗口播放（标题 package:media_kit），视频飘出应用、主窗口只剩占位 logo。
+    final bool voOverrideAllowed = Platform.isAndroid;
     final persistedMode = ref.read(srModeProvider);
-    // 持久化为实验档时走创建时路径挂 gpu-next（Android 控制器会用此 vo
-    // 覆盖 PlayerConfiguration，见 VideoControllerConfiguration 注释）；
-    // 其余档位用默认 gpu。
-    final initialVo =
-        persistedMode == SrMode.experimental && ShaderService.gpuNextAvailable
+    final initialVo = voOverrideAllowed
+        ? (persistedMode == SrMode.experimental && ShaderService.gpuNextAvailable
             ? 'gpu-next'
-            : 'gpu';
+            : 'gpu')
+        : null;
     _controller = VideoController(
       _player,
       configuration: VideoControllerConfiguration(vo: initialVo),
@@ -132,7 +132,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     // 创建时路径的 vo 由控制器在首帧加载时统一写入 mpv，这里同步登记到
     // _vo，避免 _applySr 首次打开时再写一次同值 vo——mpv 对 vo 属性的
     // 运行时写入会销毁重建 VO，撞上首帧初始化会偶发渲染链卡死（黑屏有声）。
-    _vo = initialVo;
+    _vo = initialVo ?? '';
     _posSub = _player.stream.position
         .where((_) => _ready)
         .distinct()
@@ -367,20 +367,25 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       final paths = await ShaderService.resolveChain(mode);
       final platform = _player.platform;
       if (platform is NativePlayer) {
-        // 实验档的 ArtCNN 是 compute shader，仅 gpu-next(libplacebo) 渲染器支持。
-        // 能力由打包的 libmpv 构建决定，静态开关优先，避免在播放中试错。
-        if (mode == SrMode.experimental && !ShaderService.gpuNextAvailable) {
+        // 实验档的 ArtCNN 是 compute shader，仅 gpu-next(libplacebo) 渲染器支持：
+        // Android 上由打包内核决定（静态开关优先，避免播放中试错）；桌面端走
+        // render API 内嵌渲染，渲染器固定为 gpu，无法切 gpu-next，一律不可用。
+        if (mode == SrMode.experimental &&
+            (!ShaderService.gpuNextAvailable || !Platform.isAndroid)) {
           if (notify && mounted) {
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('当前播放内核不含 gpu-next，实验档不可用'),
+              content: Text('桌面端实验档不可用：内嵌渲染走 render API，不含 gpu-next'),
               duration: Duration(seconds: 2),
             ));
           }
           return;
         }
-        // 其余档位沿用默认 vo（Android 上通常为 gpu）。mpv 的 vo 支持运行时热切换。
+        // Android：档位热切 vo（mpv 支持运行时切换）；桌面端 vo 必须保持
+        // libmpv（覆盖即飘窗），仅挂 glsl-shaders。
         final wantVo = mode == SrMode.experimental ? 'gpu-next' : 'gpu';
-        if (_vo != wantVo && (mode == SrMode.experimental || _vo.isNotEmpty)) {
+        if (Platform.isAndroid &&
+            _vo != wantVo &&
+            (mode == SrMode.experimental || _vo.isNotEmpty)) {
           final ok = await _switchVo(platform, wantVo);
           if (!ok && mode == SrMode.experimental) {
             if (notify && mounted) {
@@ -608,20 +613,22 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // 桌面端内嵌渲染（render API）不含 gpu-next，实验档不展示。
                       for (final m in SrMode.values)
-                        RadioListTile<SrMode>(
-                          value: m,
-                          groupValue: mode,
-                          onChanged: (v) {
-                            if (v != null) {
-                              ref.read(srModeProvider.notifier).set(v);
-                              _applySr(v);
-                            }
-                          },
-                          title: Text(m == SrMode.off ? '关闭' : m.label),
-                          subtitle:
-                              Text(m.desc, style: const TextStyle(fontSize: 12)),
-                        ),
+                        if (m != SrMode.experimental || Platform.isAndroid)
+                          RadioListTile<SrMode>(
+                            value: m,
+                            groupValue: mode,
+                            onChanged: (v) {
+                              if (v != null) {
+                                ref.read(srModeProvider.notifier).set(v);
+                                _applySr(v);
+                              }
+                            },
+                            title: Text(m == SrMode.off ? '关闭' : m.label),
+                            subtitle: Text(m.desc,
+                                style: const TextStyle(fontSize: 12)),
+                          ),
                       const SizedBox(height: 8),
                     ],
                   ),
