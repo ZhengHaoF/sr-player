@@ -22,6 +22,8 @@ class SrPlayerApp extends StatelessWidget {
       title: 'SR Player',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
+        // 全局使用 MiSans（中文为主），Material 3 各字重由 assets/fonts 四档覆盖。
+        fontFamily: 'MiSans',
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
       ),
