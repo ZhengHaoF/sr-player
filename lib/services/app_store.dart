@@ -37,6 +37,10 @@ class AppStore {
   static bool get showHidden => _p.getBool('show_hidden') ?? false;
   static Future<void> setShowHidden(bool v) => _p.setBool('show_hidden', v);
 
+  /// 播放结束自动连播下一集（播放列表存在时生效）。
+  static bool get autoNext => _p.getBool('auto_next') ?? true;
+  static Future<void> setAutoNext(bool v) => _p.setBool('auto_next', v);
+
   // ---------- 收藏文件夹 ----------
 
   static List<String> get favorites => _p.getStringList('favorites') ?? [];

@@ -45,15 +45,11 @@ class ShaderService {
     'Anime4K_Upscale_CNN_x2_M.glsl',
   ];
 
-  /// 极致档（PC 端）：quality 链全量，放大收尾后追加二段 Restore_CNN_S，
-  /// 对放大痕迹做最后一次 CNN 修复。shader 全部已在包内，无新增文件。
+  /// 极致档（PC 端）：quality 链全量，末尾追加 Upscale_S 补一档缩放，
+  /// 再以 Restore_CNN_S 对放大痕迹做最后一次 CNN 修复。shader 全部已在
+  /// 包内，无新增文件。
   static const List<String> ultraChain = [
-    'Anime4K_Clamp_Highlights.glsl',
-    'Anime4K_Restore_CNN_VL.glsl',
-    'Anime4K_Upscale_CNN_x2_VL.glsl',
-    'Anime4K_AutoDownscalePre_x2.glsl',
-    'Anime4K_Upscale_CNN_x2_M.glsl',
-    'Anime4K_AutoDownscalePre_x4.glsl',
+    ...qualityChain,
     'Anime4K_Upscale_CNN_x2_S.glsl',
     'Anime4K_Restore_CNN_S.glsl',
   ];

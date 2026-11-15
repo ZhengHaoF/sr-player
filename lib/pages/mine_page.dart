@@ -68,6 +68,19 @@ class _MinePageState extends ConsumerState<MinePage>
               subtitle: Text(m.desc, style: const TextStyle(fontSize: 12)),
               secondary: const Icon(Icons.auto_awesome_outlined),
             ),
+        SwitchListTile(
+          secondary: const Icon(Icons.skip_next_outlined),
+          title: const Text('自动连播'),
+          subtitle: const Text(
+            '播完当前集自动播放列表中的下一集。',
+            style: TextStyle(fontSize: 12),
+          ),
+          value: AppStore.autoNext,
+          onChanged: (v) async {
+            await AppStore.setAutoNext(v);
+            setState(() {});
+          },
+        ),
         const _SectionHeader('文件'),
         SwitchListTile(
           secondary: const Icon(Icons.visibility_outlined),

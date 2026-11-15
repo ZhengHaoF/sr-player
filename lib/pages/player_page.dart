@@ -14,6 +14,7 @@ import '../models.dart';
 import '../services/app_store.dart';
 import '../services/netdisk/baidu_api.dart';
 import '../services/netdisk/play_source.dart';
+import '../services/playlist_service.dart';
 import '../services/shader_service.dart';
 import '../state.dart';
 
@@ -47,6 +48,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   bool _ready = false;
   String _error = '';
 
+  /// 当前播放源：widget.source 仅为初始值，切集时整体替换。
+  late PlayableSource _source;
+
   // 控制层状态。
   bool _showControls = true;
   bool _locked = false;
@@ -56,6 +60,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
   /// 桌面端窗口全屏状态（移动端本就全屏，恒为 false）。
   bool _isFullscreen = false;
+
+  // —— 播放列表：同目录视频（本地父目录 / 网盘同目录），由
+  //    [PlaylistService.discover] 发现；空列表 = 无上下文，按钮/抽屉隐藏。
+  List<PlaylistEntry> _playlist = const [];
+  int _playlistIndex = -1;
+  bool _playlistOpen = false;
+  StreamSubscription? _completedSub;
 
   /// 当前生效的 mpv vo。initState 按持久化档位登记（经 Android 控制器配置，
   /// 首帧加载时由控制器统一写入 mpv），播放中切档由 [_applySr] 运行时接管。
@@ -140,6 +151,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     // _vo，避免 _applySr 首次打开时再写一次同值 vo——mpv 对 vo 属性的
     // 运行时写入会销毁重建 VO，撞上首帧初始化会偶发渲染链卡死（黑屏有声）。
     _vo = initialVo ?? '';
+    _source = widget.source;
+    // 同目录播放列表（异步发现，失败静默）+ 播完自动连播。
+    unawaited(_discoverPlaylist());
+    _completedSub = _player.stream.completed.listen((completed) {
+      if (!completed || !AppStore.autoNext) return;
+      final next = _playlistIndex + 1;
+      if (next < _playlist.length) _switchEpisode(next);
+    });
     _posSub = _player.stream.position.where((_) => _ready).distinct().listen((
       pos,
     ) {
@@ -193,14 +212,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   Future<void> _open() async {
     // 记住的清晰度（仅对支持清晰度的源生效）。
     String quality = '';
-    if (widget.source.qualities.isNotEmpty) {
+    if (_source.qualities.isNotEmpty) {
       final saved = AppStore.getString('netdisk_quality') ?? 'M3U8_AUTO_480';
-      quality = widget.source.qualities.any((q) => q.key == saved)
+      quality = _source.qualities.any((q) => q.key == saved)
           ? saved
-          : widget.source.qualities.first.key;
+          : _source.qualities.first.key;
     }
     // 本地源：续播位置在打开后 seek；在线源由 _openStream 透传。
-    final saved = AppStore.getPosition(widget.source.resumeKey);
+    final saved = AppStore.getPosition(_source.resumeKey);
     final posMs = (saved?['pos'] as num?)?.toInt() ?? 0;
     await _openStream(qualityKey: quality, resumeMs: posMs);
   }
@@ -215,10 +234,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     });
     PlayStream stream;
     try {
-      stream = await widget.source.open(qualityKey);
+      stream = await _source.open(qualityKey);
     } on BaiduApiException catch (e) {
       // 云端转码不可用/无权限 → 自动降级 dlink 原画。
-      final hasOrigin = widget.source.qualities.any((q) => q.key.isEmpty);
+      final hasOrigin = _source.qualities.any((q) => q.key.isEmpty);
       if (qualityKey.isNotEmpty && hasOrigin && mounted) {
         debugPrint('[net] ${e}，自动降级原画');
         ScaffoldMessenger.of(context).showSnackBar(
@@ -251,7 +270,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       // 打开/换档期间锁住续播保存，防止 HLS 打开初期的低 position 覆盖续播点。
       var targetMs = resumeMs ?? 0;
       if (resumeMs == null) {
-        final saved = AppStore.getPosition(widget.source.resumeKey);
+        final saved = AppStore.getPosition(_source.resumeKey);
         final durMs = (saved?['dur'] as num?)?.toInt() ?? 0;
         final savedPos = (saved?['pos'] as num?)?.toInt() ?? 0;
         if (savedPos > 5000 && (durMs <= 0 || savedPos < durMs * 0.95)) {
@@ -390,10 +409,160 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   String _mpvTime(int ms) => (ms / 1000).toStringAsFixed(3);
 
   String get _qualityLabel {
-    for (final q in widget.source.qualities) {
+    for (final q in _source.qualities) {
       if (q.key == _quality) return q.label;
     }
     return '';
+  }
+
+  // —— 播放列表 ——
+
+  /// 发现同目录播放列表并定位当前集。失败静默：无列表时按钮/抽屉隐藏。
+  Future<void> _discoverPlaylist() async {
+    try {
+      final entries = await PlaylistService.discover(_source);
+      if (!mounted) return;
+      setState(() {
+        _playlist = entries;
+        _playlistIndex = PlaylistService.indexOf(entries, _source.resumeKey);
+      });
+    } catch (e) {
+      debugPrint('[playlist] discover failed: $e');
+    }
+  }
+
+  bool get _hasPrev => _playlistIndex > 0;
+  bool get _hasNext =>
+      _playlistIndex >= 0 && _playlistIndex < _playlist.length - 1;
+
+  /// 切换集数：保存当前进度 → 换源重开。复用 [_open] 的清晰度记忆与
+  /// 断点续播逻辑（新集有旧进度则自动续播，无则从头播）。
+  Future<void> _switchEpisode(int index) async {
+    if (index < 0 || index >= _playlist.length || index == _playlistIndex) {
+      return;
+    }
+    _savePlaybackNow();
+    if (!mounted) return;
+    setState(() {
+      _source = _playlist[index].source;
+      _playlistIndex = index;
+      // 小屏切集后关闭抽屉回画面，桌面端保持展开。
+      if (Platform.isAndroid || Platform.isIOS) _playlistOpen = false;
+    });
+    await _open();
+  }
+
+  void _togglePlaylist() => setState(() => _playlistOpen = !_playlistOpen);
+
+  double _playlistDrawerWidth() {
+    final w = MediaQuery.sizeOf(context).width;
+    return w < 320 ? w * 0.75 : 300;
+  }
+
+  /// 播放列表侧边抽屉面板。
+  Widget _buildPlaylistPanel() {
+    return Container(
+      color: const Color(0xF00B0B0B),
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 4, 12),
+              child: Row(
+                children: [
+                  Text(
+                    '播放列表（${_playlist.length}）',
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    tooltip: '收起',
+                    onPressed: _togglePlaylist,
+                    icon: const Icon(
+                      Icons.keyboard_double_arrow_right,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1, color: Colors.white12),
+            Expanded(child: _buildPlaylistList()),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 集数列表；首次展开时滚动定位到当前集附近。
+  ScrollController? _playlistScroll;
+
+  Widget _buildPlaylistList() {
+    _playlistScroll ??= ScrollController(
+      initialScrollOffset: _playlistOpen ? _initialPlaylistOffset() : 0,
+    );
+    return ListView.builder(
+      controller: _playlistScroll,
+      itemCount: _playlist.length,
+      itemBuilder: (ctx, i) {
+        final e = _playlist[i];
+        final isCurrent = i == _playlistIndex;
+        final resume = isCurrent ? null : e.resumeLabel;
+        return ListTile(
+          dense: true,
+          selected: isCurrent,
+          selectedTileColor: Theme.of(
+            context,
+          ).colorScheme.primary.withValues(alpha: 0.18),
+          leading: isCurrent
+              ? Icon(
+                  Icons.play_arrow_rounded,
+                  color: Theme.of(context).colorScheme.primary,
+                )
+              : SizedBox(
+                  width: 32,
+                  child: Text(
+                    e.episode?.toString() ?? '',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 12, color: Colors.white38),
+                  ),
+                ),
+          title: Text(
+            e.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 13,
+              color: isCurrent
+                  ? Theme.of(context).colorScheme.primary
+                  : Colors.white70,
+              fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+          subtitle: resume == null
+              ? null
+              : Text(
+                  resume,
+                  style: const TextStyle(fontSize: 11, color: Colors.white38),
+                ),
+          onTap: () => _switchEpisode(i),
+        );
+      },
+    );
+  }
+
+  /// 当前集在列表视口内大致居中的初始滚动偏移。
+  double _initialPlaylistOffset() {
+    if (_playlistIndex <= 0) return 0;
+    const row = 48.0;
+    final max = _playlist.length * row;
+    final want = _playlistIndex * row - 100;
+    return want.clamp(0.0, max);
   }
 
   /// 切换超分档位：解析 shader → setProperty 热挂载，无需重建播放器。
@@ -506,28 +675,35 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     final p = pos.inMilliseconds;
     if (p <= 0 || (dur > 0 && p >= dur * 0.95)) return;
     AppStore.recordPlayback(
-      path: widget.source.resumeKey,
-      name: widget.source.title,
+      path: _source.resumeKey,
+      name: _source.title,
       posMs: p,
       durMs: dur,
     );
   }
 
-  @override
-  void dispose() {
+  /// 立即保存当前播放进度（切集与退出共用；看至 95% 以上视为看完不记录）。
+  void _savePlaybackNow() {
     final dur = _player.state.duration.inMilliseconds;
     final pos = _player.state.position.inMilliseconds;
     if (pos > 0 && (dur <= 0 || pos < dur * 0.95)) {
       AppStore.recordPlayback(
-        path: widget.source.resumeKey,
-        name: widget.source.title,
+        path: _source.resumeKey,
+        name: _source.title,
         posMs: pos,
         durMs: dur,
       );
     }
+  }
+
+  @override
+  void dispose() {
+    _savePlaybackNow();
     _posSub?.cancel();
     _logSub?.cancel();
     _tracksSub?.cancel();
+    _completedSub?.cancel();
+    _playlistScroll?.dispose();
     _hideTimer?.cancel();
     _gateTimer?.cancel();
     _hudTimer?.cancel();
@@ -712,7 +888,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     final groups = await _collectInfoGroups(
       player: _player,
       srMode: ref.read(srModeProvider),
-      source: widget.source,
+      source: _source,
       qualityLabel: _qualityLabel,
     );
     if (!mounted) return;
@@ -803,6 +979,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
             _toggleFullscreen();
           }
         },
+        const SingleActivator(LogicalKeyboardKey.pageUp): () {
+          if (_hasPrev) _switchEpisode(_playlistIndex - 1);
+        },
+        const SingleActivator(LogicalKeyboardKey.pageDown): () {
+          if (_hasNext) _switchEpisode(_playlistIndex + 1);
+        },
       },
       child: Focus(
         autofocus: true,
@@ -888,6 +1070,35 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                   ),
                 ),
               ),
+              // 播放列表抽屉：遮罩 + 右侧滑入面板。
+              Positioned.fill(
+                child: IgnorePointer(
+                  ignoring: !_playlistOpen,
+                  child: AnimatedOpacity(
+                    opacity: _playlistOpen ? 1 : 0,
+                    duration: const Duration(milliseconds: 200),
+                    child: GestureDetector(
+                      onTap: _togglePlaylist,
+                      child: Container(color: Colors.black45),
+                    ),
+                  ),
+                ),
+              ),
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeOutCubic,
+                top: 0,
+                bottom: 0,
+                right: _playlistOpen ? 0 : -_playlistDrawerWidth(),
+                width: _playlistDrawerWidth(),
+                child: Material(
+                  elevation: 8,
+                  color: Colors.transparent,
+                  child: _playlist.isEmpty
+                      ? const SizedBox.shrink()
+                      : _buildPlaylistPanel(),
+                ),
+              ),
             ],
           ),
         ),
@@ -910,7 +1121,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
               ),
               Expanded(
                 child: Text(
-                  widget.source.title,
+                  _source.title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: Colors.white),
@@ -920,6 +1131,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                 tooltip: '视频信息',
                 onPressed: _showInfoSheet,
                 icon: const Icon(Icons.info_outline, color: Colors.white),
+              ),
+              // 播放列表（发现失败/无同目录视频时置灰）。
+              IconButton(
+                tooltip: '播放列表',
+                onPressed: _playlist.isEmpty ? null : _togglePlaylist,
+                icon: Icon(
+                  Icons.playlist_play,
+                  color: _playlist.isEmpty ? Colors.white24 : Colors.white,
+                ),
               ),
               // 桌面端全屏切换；移动端本就全屏，不显示入口。
               if (!Platform.isAndroid && !Platform.isIOS)
@@ -949,7 +1169,27 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
               _SeekBar(player: _player),
               Row(
                 children: [
+                  IconButton(
+                    tooltip: '上一集',
+                    onPressed: _hasPrev
+                        ? () => _switchEpisode(_playlistIndex - 1)
+                        : null,
+                    icon: Icon(
+                      Icons.skip_previous,
+                      color: _hasPrev ? Colors.white : Colors.white24,
+                    ),
+                  ),
                   _StreamPlayButton(player: _player),
+                  IconButton(
+                    tooltip: '下一集',
+                    onPressed: _hasNext
+                        ? () => _switchEpisode(_playlistIndex + 1)
+                        : null,
+                    icon: Icon(
+                      Icons.skip_next,
+                      color: _hasNext ? Colors.white : Colors.white24,
+                    ),
+                  ),
                   IconButton(
                     onPressed: _cycleOrientation,
                     icon: const Icon(
@@ -982,12 +1222,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                     ],
                   ),
                   // 清晰度（仅在线源显示）。
-                  if (widget.source.qualities.isNotEmpty)
+                  if (_source.qualities.isNotEmpty)
                     PopupMenuButton<String>(
                       tooltip: '清晰度',
                       onSelected: _switchQuality,
                       itemBuilder: (_) => [
-                        for (final q in widget.source.qualities)
+                        for (final q in _source.qualities)
                           CheckedPopupMenuItem(
                             value: q.key,
                             checked: q.key == _quality,
