@@ -18,7 +18,10 @@ class AppStore {
 
   static SrMode get srMode {
     final v = _p.getString('sr_mode');
-    return SrMode.values.firstWhere((e) => e.name == v, orElse: () => SrMode.off);
+    return SrMode.values.firstWhere(
+      (e) => e.name == v,
+      orElse: () => SrMode.off,
+    );
   }
 
   static Future<void> setSrMode(SrMode m) => _p.setString('sr_mode', m.name);
@@ -54,7 +57,8 @@ class AppStore {
     }
   }
 
-  static Future<void> removePosition(String path) => _p.remove('position:$path');
+  static Future<void> removePosition(String path) =>
+      _p.remove('position:$path');
 
   static Future<void> recordPlayback({
     required String path,
@@ -64,7 +68,11 @@ class AppStore {
   }) async {
     await _p.setString(
       'position:$path',
-      jsonEncode({'pos': posMs, 'dur': durMs, 'updated': DateTime.now().millisecondsSinceEpoch}),
+      jsonEncode({
+        'pos': posMs,
+        'dur': durMs,
+        'updated': DateTime.now().millisecondsSinceEpoch,
+      }),
     );
     // 更新历史列表（最新在前，去重，截断）。
     final raw = _p.getString('history');
@@ -88,7 +96,9 @@ class AppStore {
     final raw = _p.getString('history');
     if (raw == null) return [];
     try {
-      return (jsonDecode(raw) as List).whereType<Map<String, dynamic>>().toList();
+      return (jsonDecode(raw) as List)
+          .whereType<Map<String, dynamic>>()
+          .toList();
     } catch (_) {
       return [];
     }
@@ -103,7 +113,8 @@ class AppStore {
   static Future<void> clearHistory() async {
     await _p.remove('history');
     // 逐条清除续播点。
-    for (final key in _p.getKeys().where((k) => k.startsWith('position:')).toList()) {
+    for (final key
+        in _p.getKeys().where((k) => k.startsWith('position:')).toList()) {
       await _p.remove(key);
     }
   }

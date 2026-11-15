@@ -16,8 +16,9 @@ class SrModeController extends Notifier<SrMode> {
   }
 }
 
-final srModeProvider =
-    NotifierProvider<SrModeController, SrMode>(SrModeController.new);
+final srModeProvider = NotifierProvider<SrModeController, SrMode>(
+  SrModeController.new,
+);
 
 /// 目录树当前路径：文件页与"收藏跳转"共享。
 class CurrentPathController extends Notifier<String> {
@@ -27,8 +28,9 @@ class CurrentPathController extends Notifier<String> {
   void set(String path) => state = path;
 }
 
-final currentPathProvider =
-    NotifierProvider<CurrentPathController, String>(CurrentPathController.new);
+final currentPathProvider = NotifierProvider<CurrentPathController, String>(
+  CurrentPathController.new,
+);
 
 /// 主存储根目录（异步确认；加载完成前用常见路径兜底）。
 final storageRootProvider = FutureProvider<String>((ref) {
@@ -43,8 +45,9 @@ class CurrentTabController extends Notifier<int> {
   void set(int index) => state = index;
 }
 
-final currentTabProvider =
-    NotifierProvider<CurrentTabController, int>(CurrentTabController.new);
+final currentTabProvider = NotifierProvider<CurrentTabController, int>(
+  CurrentTabController.new,
+);
 
 /// 网盘浏览当前目录（云盘绝对路径，根为 /）。
 class CloudPathController extends Notifier<String> {
@@ -54,8 +57,9 @@ class CloudPathController extends Notifier<String> {
   void set(String path) => state = path;
 }
 
-final cloudPathProvider =
-    NotifierProvider<CloudPathController, String>(CloudPathController.new);
+final cloudPathProvider = NotifierProvider<CloudPathController, String>(
+  CloudPathController.new,
+);
 
 /// 网盘登录态：登录/登出后通知网盘页刷新。
 class CloudLoggedInController extends Notifier<bool> {
@@ -72,5 +76,6 @@ class CloudLoggedInController extends Notifier<bool> {
   }
 }
 
-final cloudLoggedInProvider =
-    NotifierProvider<CloudLoggedInController, bool>(CloudLoggedInController.new);
+final cloudLoggedInProvider = NotifierProvider<CloudLoggedInController, bool>(
+  CloudLoggedInController.new,
+);

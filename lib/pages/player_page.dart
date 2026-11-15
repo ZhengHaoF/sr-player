@@ -31,7 +31,9 @@ class PlayerPage extends ConsumerStatefulWidget {
 
   /// 本地文件便捷入口（视频库/文件页/历史页调用）。
   factory PlayerPage.local(String path, {required String title}) {
-    return PlayerPage(source: LocalPlayableSource(path: path, title: title));
+    return PlayerPage(
+      source: LocalPlayableSource(path: path, title: title),
+    );
   }
 
   @override
@@ -121,9 +123,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     final bool voOverrideAllowed = Platform.isAndroid;
     final persistedMode = ref.read(srModeProvider);
     final initialVo = voOverrideAllowed
-        ? (persistedMode == SrMode.experimental && ShaderService.gpuNextAvailable
-            ? 'gpu-next'
-            : 'gpu')
+        ? (persistedMode == SrMode.experimental &&
+                  ShaderService.gpuNextAvailable
+              ? 'gpu-next'
+              : 'gpu')
         : null;
     _controller = VideoController(
       _player,
@@ -133,10 +136,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     // _vo，避免 _applySr 首次打开时再写一次同值 vo——mpv 对 vo 属性的
     // 运行时写入会销毁重建 VO，撞上首帧初始化会偶发渲染链卡死（黑屏有声）。
     _vo = initialVo ?? '';
-    _posSub = _player.stream.position
-        .where((_) => _ready)
-        .distinct()
-        .listen((pos) {
+    _posSub = _player.stream.position.where((_) => _ready).distinct().listen((
+      pos,
+    ) {
       if (_saveGateMs > 0) {
         if (pos.inMilliseconds < _saveGateMs) return;
         _saveGateMs = 0; // 已观察到 seek 目标位置，恢复正常保存
@@ -148,33 +150,39 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     });
     // mpv 日志（warn 及以上）打到 logcat，便于排查 shader / vo / 网络流问题。
     _logSub = _player.stream.log
-        .where((e) =>
-            e.level == 'warn' || e.level == 'error' || e.level == 'fatal')
+        .where(
+          (e) => e.level == 'warn' || e.level == 'error' || e.level == 'fatal',
+        )
         .listen((e) {
-      debugPrint('[mpv/${e.level}] ${e.prefix}: ${e.text}');
-      if (e.level == 'fatal' || (e.level == 'error' && e.prefix == 'vo')) {
-        _lastVoError = '${e.prefix}: ${e.text}';
-      }
-      if (_pendingOpen &&
-          (e.level == 'fatal' ||
-              (e.level == 'error' &&
-                  (e.prefix == 'lavf' ||
-                      e.prefix == 'demux' ||
-                      e.prefix == 'file' ||
-                      e.prefix == 'hls' ||
-                      e.prefix == 'avformat' ||
-                      e.prefix == 'cplayer')))) {
-        _openFailure ??= '${e.prefix}: ${e.text}';
-      }
-    });
+          debugPrint('[mpv/${e.level}] ${e.prefix}: ${e.text}');
+          if (e.level == 'fatal' || (e.level == 'error' && e.prefix == 'vo')) {
+            _lastVoError = '${e.prefix}: ${e.text}';
+          }
+          if (_pendingOpen &&
+              (e.level == 'fatal' ||
+                  (e.level == 'error' &&
+                      (e.prefix == 'lavf' ||
+                          e.prefix == 'demux' ||
+                          e.prefix == 'file' ||
+                          e.prefix == 'hls' ||
+                          e.prefix == 'avformat' ||
+                          e.prefix == 'cplayer')))) {
+            _openFailure ??= '${e.prefix}: ${e.text}';
+          }
+        });
     // 手势能力探测：读不到当前值说明平台未实现插件（如音量控制的桌面端），
     // 静默禁用对应手势，避免播放中抛 MissingPluginException。
-    ScreenBrightness.instance.application.then((v) => _brightness = v,
-        onError: (_) => _brightnessSupported = false);
+    ScreenBrightness.instance.application.then(
+      (v) => _brightness = v,
+      onError: (_) => _brightnessSupported = false,
+    );
     VolumeController.instance
-      ..showSystemUI = false // 音量 HUD 自绘，不叠加系统条
-      ..getVolume().then((v) => _volume = v,
-          onError: (_) => _volumeSupported = false);
+      ..showSystemUI =
+          false // 音量 HUD 自绘，不叠加系统条
+      ..getVolume().then(
+        (v) => _volume = v,
+        onError: (_) => _volumeSupported = false,
+      );
     _open();
   }
 
@@ -194,10 +202,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   }
 
   /// 打开指定清晰度。resumeMs：续播/切清晰度时的回跳位置。
-  Future<void> _openStream({
-    required String qualityKey,
-    int? resumeMs,
-  }) async {
+  Future<void> _openStream({required String qualityKey, int? resumeMs}) async {
     if (!mounted) return;
     setState(() {
       _ready = false;
@@ -212,10 +217,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       final hasOrigin = widget.source.qualities.any((q) => q.key.isEmpty);
       if (qualityKey.isNotEmpty && hasOrigin && mounted) {
         debugPrint('[net] ${e}，自动降级原画');
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('云端转码不可用（$e），已切换原画播放'),
-          duration: const Duration(seconds: 3),
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('云端转码不可用（$e），已切换原画播放'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
         return _openStream(qualityKey: '', resumeMs: resumeMs);
       }
       if (mounted) setState(() => _error = '$e');
@@ -254,7 +261,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       // demuxer 丢弃/竞态，start 由 mpv 在装载 m3u8 时原生处理，无此问题。
       if (platform is NativePlayer) {
         await platform.setProperty(
-            'start', targetMs > 0 ? _mpvTime(targetMs) : 'none');
+          'start',
+          targetMs > 0 ? _mpvTime(targetMs) : 'none',
+        );
       }
       for (final attempt in isNetwork ? _lavfLadder : ['']) {
         if (platform is NativePlayer) {
@@ -264,11 +273,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         _openFailure = null;
         _pendingOpen = isNetwork;
         _awaitingTracks = true;
-        await _player.open(Media(stream.uri,
-            httpHeaders: stream.headers.isEmpty ? null : stream.headers));
+        await _player.open(
+          Media(
+            stream.uri,
+            httpHeaders: stream.headers.isEmpty ? null : stream.headers,
+          ),
+        );
         // 等轨道解析成功（最多 10s）；期间出现 lavf/demux 错误则提前失败。
-        final deadline =
-            DateTime.now().add(const Duration(milliseconds: 10000));
+        final deadline = DateTime.now().add(
+          const Duration(milliseconds: 10000),
+        );
         var ok = false;
         while (DateTime.now().isBefore(deadline)) {
           if (_gotTracks) {
@@ -281,16 +295,20 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         _pendingOpen = false;
         _awaitingTracks = false;
         if (ok) break;
-        debugPrint('[net] 打开失败（lavf-o="${attempt.isEmpty ? '默认' : attempt}"'
-            '${_openFailure == null ? '' : ", $_openFailure"}），尝试下一档');
+        debugPrint(
+          '[net] 打开失败（lavf-o="${attempt.isEmpty ? '默认' : attempt}"'
+          '${_openFailure == null ? '' : ", $_openFailure"}），尝试下一档',
+        );
         await _player.stop();
       }
       if (!_gotTracks) {
         _saveGateMs = 0;
         if (mounted) {
-          setState(() => _error =
-              '播放失败：无法建立${isNetwork ? '网络' : ''}媒体流'
-              '${_openFailure == null ? '' : '（$_openFailure）'}');
+          setState(
+            () => _error =
+                '播放失败：无法建立${isNetwork ? '网络' : ''}媒体流'
+                '${_openFailure == null ? '' : '（$_openFailure）'}',
+          );
         }
         return;
       }
@@ -347,8 +365,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       await AppStore.setString('netdisk_quality', key);
     }
     final pos = _player.state.position.inMilliseconds;
-    await _openStream(
-        qualityKey: key, resumeMs: pos > 0 ? pos : null);
+    await _openStream(qualityKey: key, resumeMs: pos > 0 ? pos : null);
   }
 
   /// mpv start 属性的时间格式（秒，含毫秒）。
@@ -373,10 +390,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         if (mode == SrMode.experimental &&
             (!ShaderService.gpuNextAvailable || !Platform.isAndroid)) {
           if (notify && mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('桌面端实验档不可用：内嵌渲染走 render API，不含 gpu-next'),
-              duration: Duration(seconds: 2),
-            ));
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('桌面端实验档不可用：内嵌渲染走 render API，不含 gpu-next'),
+                duration: Duration(seconds: 2),
+              ),
+            );
           }
           return;
         }
@@ -389,10 +408,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           final ok = await _switchVo(platform, wantVo);
           if (!ok && mode == SrMode.experimental) {
             if (notify && mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                content: Text('当前播放内核不支持 gpu-next，实验档不可用'),
-                duration: Duration(seconds: 2),
-              ));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('当前播放内核不支持 gpu-next，实验档不可用'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
             }
             return;
           }
@@ -400,23 +421,29 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         // glsl-shaders 是 mpv 的路径列表选项：分隔符在 Unix/Android 上是 ':'（Windows 为 ';'），
         // 用 ',' 会被当成一个整体路径，导致 Cannot open file、shader 静默不挂载。
         await platform.setProperty(
-            'glsl-shaders', paths.join(Platform.isWindows ? ';' : ':'));
+          'glsl-shaders',
+          paths.join(Platform.isWindows ? ';' : ':'),
+        );
         // 诊断：稍候 vo 初始化完成后输出实际生效的渲染器到 logcat。
         // 不 await：固定延迟若阻塞在此，每次打开都会白付 1.2s 才出画面。
-        unawaited(Future<void>.delayed(const Duration(milliseconds: 1200),
-            () async {
-          try {
-            final vo = await platform.getProperty('current-vo');
-            debugPrint('[sr] mode=$mode glsl=${paths.length} current-vo=$vo');
-          } catch (_) {// 播放器已释放等场景，诊断失败无碍
-          }
-        }));
+        unawaited(
+          Future<void>.delayed(const Duration(milliseconds: 1200), () async {
+            try {
+              final vo = await platform.getProperty('current-vo');
+              debugPrint('[sr] mode=$mode glsl=${paths.length} current-vo=$vo');
+            } catch (_) {
+              // 播放器已释放等场景，诊断失败无碍
+            }
+          }),
+        );
       }
       if (notify && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              mode == SrMode.off ? '超分辨率：关闭' : '超分辨率：${mode.label}档（${paths.length} 个着色器）',
+              mode == SrMode.off
+                  ? '超分辨率：关闭'
+                  : '超分辨率：${mode.label}档（${paths.length} 个着色器）',
             ),
             duration: const Duration(seconds: 1),
           ),
@@ -424,8 +451,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       }
     } catch (e) {
       if (notify && mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('切换失败：$e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('切换失败：$e')));
       }
     }
   }
@@ -452,10 +480,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     final p = pos.inMilliseconds;
     if (p <= 0 || (dur > 0 && p >= dur * 0.95)) return;
     AppStore.recordPlayback(
-        path: widget.source.resumeKey,
-        name: widget.source.title,
-        posMs: p,
-        durMs: dur);
+      path: widget.source.resumeKey,
+      name: widget.source.title,
+      posMs: p,
+      durMs: dur,
+    );
   }
 
   @override
@@ -464,10 +493,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     final pos = _player.state.position.inMilliseconds;
     if (pos > 0 && (dur <= 0 || pos < dur * 0.95)) {
       AppStore.recordPlayback(
-          path: widget.source.resumeKey,
-          name: widget.source.title,
-          posMs: pos,
-          durMs: dur);
+        path: widget.source.resumeKey,
+        name: widget.source.title,
+        posMs: pos,
+        durMs: dur,
+      );
     }
     _posSub?.cancel();
     _logSub?.cancel();
@@ -589,55 +619,61 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       context: context,
       // 小屏上固定内容会超出默认 9/16 高度上限，允许弹层撑高并让列表滚动。
       isScrollControlled: true,
-      builder: (ctx) => Consumer(builder: (ctx, ref, _) {
-        final mode = ref.watch(srModeProvider);
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Padding(
-                padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
-                child: Text('画面设置 · 超分辨率',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-              ),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16),
-                child: Text(
-                  '基于 Anime4K / ArtCNN GLSL 着色器，热切换无需重启播放。',
-                  style: TextStyle(fontSize: 12, color: Colors.grey),
-                ),
-              ),
-              Flexible(
-                child: SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // 桌面端内嵌渲染（render API）不含 gpu-next，实验档不展示。
-                      for (final m in SrMode.values)
-                        if (m != SrMode.experimental || Platform.isAndroid)
-                          RadioListTile<SrMode>(
-                            value: m,
-                            groupValue: mode,
-                            onChanged: (v) {
-                              if (v != null) {
-                                ref.read(srModeProvider.notifier).set(v);
-                                _applySr(v);
-                              }
-                            },
-                            title: Text(m == SrMode.off ? '关闭' : m.label),
-                            subtitle: Text(m.desc,
-                                style: const TextStyle(fontSize: 12)),
-                          ),
-                      const SizedBox(height: 8),
-                    ],
+      builder: (ctx) => Consumer(
+        builder: (ctx, ref, _) {
+          final mode = ref.watch(srModeProvider);
+          return SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
+                  child: Text(
+                    '画面设置 · 超分辨率',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                 ),
-              ),
-            ],
-          ),
-        );
-      }),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16),
+                  child: Text(
+                    '基于 Anime4K / ArtCNN GLSL 着色器，热切换无需重启播放。',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                ),
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // 桌面端内嵌渲染（render API）不含 gpu-next，实验档不展示。
+                        for (final m in SrMode.values)
+                          if (m != SrMode.experimental || Platform.isAndroid)
+                            RadioListTile<SrMode>(
+                              value: m,
+                              groupValue: mode,
+                              onChanged: (v) {
+                                if (v != null) {
+                                  ref.read(srModeProvider.notifier).set(v);
+                                  _applySr(v);
+                                }
+                              },
+                              title: Text(m == SrMode.off ? '关闭' : m.label),
+                              subtitle: Text(
+                                m.desc,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ),
+                        const SizedBox(height: 8),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -661,8 +697,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           children: [
             const Padding(
               padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
-              child: Text('视频信息',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              child: Text(
+                '视频信息',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
             ),
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16),
@@ -679,9 +717,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                     for (final g in groups) ...[
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
-                        child: Text(g.title,
-                            style: const TextStyle(
-                                fontSize: 14, fontWeight: FontWeight.bold)),
+                        child: Text(
+                          g.title,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                       ),
                       for (final (label, value) in g.rows)
                         _infoRow(label, value),
@@ -703,21 +745,22 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       return Scaffold(
         backgroundColor: Colors.black,
         appBar: AppBar(title: const Text('播放失败')),
-        body: Center(child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(_error, style: const TextStyle(color: Colors.white70)),
-              const SizedBox(height: 16),
-              OutlinedButton(
-                onPressed: () => _openStream(
-                    qualityKey: _quality),
-                child: const Text('重试'),
-              ),
-            ],
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(_error, style: const TextStyle(color: Colors.white70)),
+                const SizedBox(height: 16),
+                OutlinedButton(
+                  onPressed: () => _openStream(qualityKey: _quality),
+                  child: const Text('重试'),
+                ),
+              ],
+            ),
           ),
-        )),
+        ),
       );
     }
 
@@ -768,7 +811,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                 duration: const Duration(milliseconds: 150),
                 child: Align(
                   alignment: Alignment(
-                      _hudKind == _DragKind.brightness ? -2 / 3 : 2 / 3, 0),
+                    _hudKind == _DragKind.brightness ? -2 / 3 : 2 / 3,
+                    0,
+                  ),
                   child: _hudKind == null
                       ? const SizedBox.shrink()
                       : _buildHudCard(_hudKind!),
@@ -840,68 +885,79 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         // 底部栏。
         Container(
           padding: EdgeInsets.only(
-            left: 8, right: 8, bottom: MediaQuery.of(context).padding.bottom + 4,
+            left: 8,
+            right: 8,
+            bottom: MediaQuery.of(context).padding.bottom + 4,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               _SeekBar(player: _player),
-              Row(children: [
-                _StreamPlayButton(player: _player),
-                IconButton(
-                  onPressed: _cycleOrientation,
-                  icon: const Icon(Icons.screen_rotation, color: Colors.white),
-                  tooltip: '方向',
-                ),
-                IconButton(
-                  onPressed: () => setState(() => _locked = true),
-                  icon: const Icon(Icons.lock_outline, color: Colors.white),
-                  tooltip: '锁定控制',
-                ),
-                const Spacer(),
-                // 倍速。
-                PopupMenuButton<double>(
-                  tooltip: '倍速',
-                  onSelected: (s) => _player.setRate(s),
-                  icon: const Icon(Icons.speed, color: Colors.white),
-                  itemBuilder: (_) => [
-                    for (final v in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0])
-                      PopupMenuItem(value: v, child: Text('$v x')),
-                  ],
-                ),
-                // 清晰度（仅在线源显示）。
-                if (widget.source.qualities.isNotEmpty)
-                  PopupMenuButton<String>(
-                    tooltip: '清晰度',
-                    onSelected: _switchQuality,
+              Row(
+                children: [
+                  _StreamPlayButton(player: _player),
+                  IconButton(
+                    onPressed: _cycleOrientation,
+                    icon: const Icon(
+                      Icons.screen_rotation,
+                      color: Colors.white,
+                    ),
+                    tooltip: '方向',
+                  ),
+                  IconButton(
+                    onPressed: () => setState(() => _locked = true),
+                    icon: const Icon(Icons.lock_outline, color: Colors.white),
+                    tooltip: '锁定控制',
+                  ),
+                  const Spacer(),
+                  // 倍速。
+                  PopupMenuButton<double>(
+                    tooltip: '倍速',
+                    onSelected: (s) => _player.setRate(s),
+                    icon: const Icon(Icons.speed, color: Colors.white),
                     itemBuilder: (_) => [
-                      for (final q in widget.source.qualities)
-                        CheckedPopupMenuItem(
-                          value: q.key,
-                          checked: q.key == _quality,
-                          child: Text(q.label),
-                        ),
+                      for (final v in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0])
+                        PopupMenuItem(value: v, child: Text('$v x')),
                     ],
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      child: Text(
-                        _qualityLabel,
-                        style: const TextStyle(
+                  ),
+                  // 清晰度（仅在线源显示）。
+                  if (widget.source.qualities.isNotEmpty)
+                    PopupMenuButton<String>(
+                      tooltip: '清晰度',
+                      onSelected: _switchQuality,
+                      itemBuilder: (_) => [
+                        for (final q in widget.source.qualities)
+                          CheckedPopupMenuItem(
+                            value: q.key,
+                            checked: q.key == _quality,
+                            child: Text(q.label),
+                          ),
+                      ],
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        child: Text(
+                          _qualityLabel,
+                          style: const TextStyle(
                             color: Colors.white,
                             fontSize: 13,
-                            fontWeight: FontWeight.bold),
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  IconButton(
+                    tooltip: '超分辨率',
+                    onPressed: _showSrSheet,
+                    icon: Badge(
+                      isLabelVisible: ref.read(srModeProvider) != SrMode.off,
+                      child: const Icon(
+                        Icons.auto_awesome,
+                        color: Colors.white,
                       ),
                     ),
                   ),
-                IconButton(
-                  tooltip: '超分辨率',
-                  onPressed: _showSrSheet,
-                  icon: Badge(
-                    isLabelVisible: ref.read(srModeProvider) != SrMode.off,
-                    child: const Icon(Icons.auto_awesome, color: Colors.white),
-                  ),
-                ),
-              ]),
+                ],
+              ),
             ],
           ),
         ),
@@ -915,10 +971,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     final icon = kind == _DragKind.brightness
         ? Icons.brightness_6_outlined
         : value <= 0.02
-            ? Icons.volume_off
-            : value < 0.5
-                ? Icons.volume_down
-                : Icons.volume_up;
+        ? Icons.volume_off
+        : value < 0.5
+        ? Icons.volume_down
+        : Icons.volume_up;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
       decoration: BoxDecoration(
@@ -983,16 +1039,25 @@ class _SeekBarState extends State<_SeekBar> {
             final maxS = dur.inMilliseconds / 1000.0;
             final value = _dragValue >= 0
                 ? _dragValue
-                : (pos.inMilliseconds / 1000.0).clamp(0.0, maxS <= 0 ? 0.0 : maxS);
+                : (pos.inMilliseconds / 1000.0).clamp(
+                    0.0,
+                    maxS <= 0 ? 0.0 : maxS,
+                  );
             String fmt(Duration d) {
               final s = d.inSeconds;
               final h = s ~/ 3600, m = (s % 3600) ~/ 60, sec = s % 60;
               String two(int v) => v.toString().padLeft(2, '0');
-              return h > 0 ? '$h:${two(m)}:${two(sec)}' : '${two(m)}:${two(sec)}';
+              return h > 0
+                  ? '$h:${two(m)}:${two(sec)}'
+                  : '${two(m)}:${two(sec)}';
             }
+
             return Row(
               children: [
-                Text(fmt(pos), style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                Text(
+                  fmt(pos),
+                  style: const TextStyle(color: Colors.white70, fontSize: 11),
+                ),
                 Expanded(
                   child: Slider(
                     value: value,
@@ -1001,12 +1066,17 @@ class _SeekBarState extends State<_SeekBar> {
                         ? null
                         : (v) => setState(() => _dragValue = v),
                     onChangeEnd: (v) async {
-                      await widget.player.seek(Duration(milliseconds: (v * 1000).round()));
+                      await widget.player.seek(
+                        Duration(milliseconds: (v * 1000).round()),
+                      );
                       if (mounted) setState(() => _dragValue = -1);
                     },
                   ),
                 ),
-                Text(fmt(dur), style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                Text(
+                  fmt(dur),
+                  style: const TextStyle(color: Colors.white70, fontSize: 11),
+                ),
               ],
             );
           },
@@ -1030,7 +1100,9 @@ class _StreamPlayButton extends StatelessWidget {
           iconSize: 36,
           color: Colors.white,
           onPressed: () => player.playOrPause(),
-          icon: Icon(playing ? Icons.pause_circle_outline : Icons.play_circle_outline),
+          icon: Icon(
+            playing ? Icons.pause_circle_outline : Icons.play_circle_outline,
+          ),
         );
       },
     );
@@ -1055,12 +1127,12 @@ Widget _infoRow(String label, String value) {
       children: [
         SizedBox(
           width: 80,
-          child: Text(label,
-              style: const TextStyle(fontSize: 13, color: Colors.grey)),
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 13, color: Colors.grey),
+          ),
         ),
-        Expanded(
-          child: Text(value, style: const TextStyle(fontSize: 13)),
-        ),
+        Expanded(child: Text(value, style: const TextStyle(fontSize: 13))),
       ],
     ),
   );
@@ -1124,12 +1196,15 @@ Future<List<_InfoGroup>> _collectInfoGroups({
   final audio = <(String, String)>[];
   if (at.codec?.isNotEmpty ?? false) audio.add(('音频编码', at.codec!));
   final sampleRate = at.samplerate ?? ap.sampleRate;
-  if (sampleRate != null && sampleRate > 0) audio.add(('采样率', _fmtKhz(sampleRate)));
+  if (sampleRate != null && sampleRate > 0)
+    audio.add(('采样率', _fmtKhz(sampleRate)));
   final chCount = at.channelscount ?? ap.channelCount;
   final chLayout = at.channels ?? ap.channels;
   if (chCount != null && chCount > 0) {
-    audio.add(('声道',
-        chLayout?.isEmpty == false ? '$chCount 声道（$chLayout）' : '$chCount 声道'));
+    audio.add((
+      '声道',
+      chLayout?.isEmpty == false ? '$chCount 声道（$chLayout）' : '$chCount 声道',
+    ));
   }
   final abps = at.bitrate;
   if (abps != null && abps > 0) audio.add(('音频码率', _fmtBitrate(abps)));
@@ -1138,12 +1213,22 @@ Future<List<_InfoGroup>> _collectInfoGroups({
   // —— 轨道 ——
   final aTracks = _realTracks(st.tracks.audio, (t) => t.id);
   final sTracks = _realTracks(st.tracks.subtitle, (t) => t.id);
-  groups.add(_InfoGroup('轨道', [
-    ('音轨',
-        aTracks.isEmpty ? '无' : '${aTracks.length} 条${_langSuffix(aTracks.map((t) => t.language))}'),
-    ('字幕',
-        sTracks.isEmpty ? '无' : '${sTracks.length} 条${_langSuffix(sTracks.map((t) => t.language))}'),
-  ]));
+  groups.add(
+    _InfoGroup('轨道', [
+      (
+        '音轨',
+        aTracks.isEmpty
+            ? '无'
+            : '${aTracks.length} 条${_langSuffix(aTracks.map((t) => t.language))}',
+      ),
+      (
+        '字幕',
+        sTracks.isEmpty
+            ? '无'
+            : '${sTracks.length} 条${_langSuffix(sTracks.map((t) => t.language))}',
+      ),
+    ]),
+  );
 
   // —— 播放器 ——
   final vo = await _mpvProp(player, 'current-vo');
@@ -1178,8 +1263,11 @@ Future<List<_InfoGroup>> _collectInfoGroups({
 
 /// 语言后缀：无有效语言返回空串，否则形如（chi、eng）。
 String _langSuffix(Iterable<String?> langs) {
-  final names =
-      langs.whereType<String>().where((s) => s.isNotEmpty).toSet().toList();
+  final names = langs
+      .whereType<String>()
+      .where((s) => s.isNotEmpty)
+      .toSet()
+      .toList();
   return names.isEmpty ? '' : '（${names.join('、')}）';
 }
 
