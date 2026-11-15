@@ -115,6 +115,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   bool _hudVisible = false;
   Timer? _hudTimer;
 
+  // —— 横滑调进度：一整屏宽 ≈ ±90s，松手落位；HUD 居中显示目标时间。 ——
+  // 与竖滑亮度/音量靠手势竞技场的方向自然区分；底部 Slider 区域横滑
+  // 仍判给 Slider（更深者先入竞技场，sweep 时先加入者胜）。
+  static const double _seekSecondsPerScreenWidth = 90;
+  int? _seekBaseMs; // 横滑起点的播放位置（ms）
+  int _seekTargetMs = 0; // 拖动中的目标位置（ms）
+  int _seekDeltaSec = 0; // 相对起点的增量（秒），HUD 展示
+  bool _seekDragging = false; // true = 拖动中；false 后 HUD 淡出期间仍展示终值
+
   // 双击播放/暂停的中心闪烁图标；null = 不显示。
   bool? _playFlash;
   Timer? _flashTimer;
@@ -793,6 +802,57 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     });
   }
 
+  /// 横滑调进度：任何横区都可触发（左/右 1/3 的竖滑仍是亮度/音量），
+  /// 锁定、抽屉展开、未就绪、无时长时忽略。起点同步读取，不异步兜底
+  /// （拖动中 position 持续前进，异步值反而会造成跳变）。
+  void _onHorizontalDragStart(DragStartDetails d) {
+    if (_locked || _playlistOpen || !_ready) return;
+    final dur = _player.state.duration.inMilliseconds;
+    if (dur <= 0) return;
+    _seekBaseMs = _player.state.position.inMilliseconds;
+    _seekTargetMs = _seekBaseMs!;
+    _seekDeltaSec = 0;
+    _seekDragging = true;
+    _hudTimer?.cancel();
+    setState(() => _hudVisible = true);
+  }
+
+  void _onHorizontalDragUpdate(DragUpdateDetails d) {
+    final base = _seekBaseMs;
+    if (!_seekDragging || base == null) return;
+    final dur = _player.state.duration.inMilliseconds;
+    final w = MediaQuery.of(context).size.width;
+    final deltaMs = (d.delta.dx / w * _seekSecondsPerScreenWidth * 1000)
+        .round();
+    _seekDeltaSec = deltaMs ~/ 1000;
+    _seekTargetMs = (base + deltaMs).clamp(0, dur);
+    setState(() {});
+  }
+
+  /// 松手落位 seek；HUD 保留终值 500ms 后淡出。
+  void _onHorizontalDragEnd([DragEndDetails? _]) {
+    if (!_seekDragging) return;
+    _seekDragging = false;
+    final base = _seekBaseMs;
+    if (base != null && _seekTargetMs != base) {
+      unawaited(_player.seek(Duration(milliseconds: _seekTargetMs)));
+    }
+    _hudTimer?.cancel();
+    _hudTimer = Timer(const Duration(milliseconds: 500), () {
+      if (mounted) setState(() => _hudVisible = false);
+    });
+  }
+
+  /// 被取消（判给 Slider 等）：不落位，直接淡出。
+  void _onHorizontalDragCancel() {
+    if (!_seekDragging) return;
+    _seekDragging = false;
+    _hudTimer?.cancel();
+    _hudTimer = Timer(const Duration(milliseconds: 300), () {
+      if (mounted) setState(() => _hudVisible = false);
+    });
+  }
+
   /// 双击切换播放/暂停，中心闪一个大图标做反馈。
   void _onDoubleTap() {
     if (_locked) return;
@@ -997,12 +1057,17 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                     ? Video(controller: _controller, controls: NoVideoControls)
                     : const CircularProgressIndicator(),
               ),
-              // 控制层。手势：单击控制层开关、双击播放/暂停、左右竖滑亮度/音量。
-              // 与底部进度条靠手势竞技场仲裁：横向移动归 Slider，竖向归本层。
+              // 控制层。手势：单击控制层开关、双击播放/暂停、竖滑亮度/音量、
+              // 横滑调进度。与底部进度条靠手势竞技场仲裁：Slider 区域横滑归
+              // Slider（更深者先入队，sweep 先加入者胜），其余横滑归本层。
               Positioned.fill(
                 child: GestureDetector(
                   onTap: _toggleControls,
                   onDoubleTap: _onDoubleTap,
+                  onHorizontalDragStart: _onHorizontalDragStart,
+                  onHorizontalDragUpdate: _onHorizontalDragUpdate,
+                  onHorizontalDragEnd: _onHorizontalDragEnd,
+                  onHorizontalDragCancel: _onHorizontalDragCancel,
                   onVerticalDragStart: _onVerticalDragStart,
                   onVerticalDragUpdate: _onVerticalDragUpdate,
                   onVerticalDragEnd: _onVerticalDragEnd,
@@ -1027,20 +1092,24 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                     icon: const Icon(Icons.lock_open),
                   ),
                 ),
-              // 竖滑 HUD：显示在对应半区中心，松手 700ms 后淡出。
+              // 手势 HUD：竖滑亮度/音量显示在对应半区中心，横滑进度居中，
+              // 松手后延迟淡出（淡出期间保持最后内容，避免内容闪变）。
               Positioned.fill(
                 child: IgnorePointer(
                   child: AnimatedOpacity(
                     opacity: _hudVisible ? 1 : 0,
                     duration: const Duration(milliseconds: 150),
                     child: Align(
-                      alignment: Alignment(
-                        _hudKind == _DragKind.brightness ? -2 / 3 : 2 / 3,
-                        0,
-                      ),
-                      child: _hudKind == null
-                          ? const SizedBox.shrink()
-                          : _buildHudCard(_hudKind!),
+                      alignment: Alignment(switch (_hudKind) {
+                        _DragKind.brightness => -2 / 3,
+                        _DragKind.volume => 2 / 3,
+                        null => 0,
+                      }, 0),
+                      child: _hudKind != null
+                          ? _buildHudCard(_hudKind!)
+                          : _seekBaseMs != null
+                          ? _buildSeekHud()
+                          : const SizedBox.shrink(),
                     ),
                   ),
                 ),
@@ -1308,6 +1377,48 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           Text(
             '${(value * 100).round()}%',
             style: const TextStyle(color: Colors.white, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 横滑进度 HUD：方向图标 + 目标时间/总时长 + 增量秒数，居中显示。
+  Widget _buildSeekHud() {
+    final base = _seekBaseMs ?? 0;
+    final forward = _seekTargetMs >= base;
+    String two(int v) => v.toString().padLeft(2, '0');
+    String fmt(int ms) {
+      final s = ms ~/ 1000;
+      final h = s ~/ 3600, m = (s % 3600) ~/ 60, sec = s % 60;
+      return h > 0 ? '$h:${two(m)}:${two(sec)}' : '${two(m)}:${two(sec)}';
+    }
+
+    final dur = _player.state.duration.inMilliseconds;
+    final delta = _seekDeltaSec;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.65),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            forward ? Icons.fast_forward : Icons.fast_rewind,
+            color: Colors.white,
+            size: 28,
+          ),
+          const SizedBox(height: 10),
+          Text(
+            '${fmt(_seekTargetMs)} / ${fmt(dur)}',
+            style: const TextStyle(color: Colors.white, fontSize: 14),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${delta >= 0 ? '+' : ''}$delta s',
+            style: const TextStyle(color: Colors.white70, fontSize: 12),
           ),
         ],
       ),
