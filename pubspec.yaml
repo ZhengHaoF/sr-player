@@ -60,6 +60,7 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -92,3 +93,13 @@ flutter:
           weight: 600
         - asset: assets/fonts/MiSans-Bold.ttf
           weight: 700
+
+flutter_launcher_icons:
+  image_path: design/icon/concept-a.png
+  android: true
+  adaptive_icon_background: design/icon/adaptive-bg.png
+  adaptive_icon_foreground: design/icon/adaptive-fg.png
+  windows:
+    generate: true
+    image_path: design/icon/concept-a.png
+    icon_size: 256
