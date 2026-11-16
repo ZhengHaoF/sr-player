@@ -174,7 +174,7 @@ class _FilesPageState extends ConsumerState<FilesPage>
         ref.watch(storageRootProvider).value ?? FsService.fallbackRoot;
     final crumbs = FsService.breadcrumbs(path, root: root);
     final isFav = AppStore.isFavorite(path);
-    final favs = AppStore.favorites;
+    final favs = AppStore.localFavorites; // 仅本地：网盘收藏在网盘页展示
 
     // 返回键由 HomePage 统一处理（文件子目录回退 / 根目录双击退出）。
     // 本页不再挂载 PopScope，避免与全局返回拦截双重触发。

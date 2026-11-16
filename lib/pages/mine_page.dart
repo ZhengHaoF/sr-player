@@ -249,38 +249,56 @@ class HistoryPage extends StatelessWidget {
   }
 }
 
-/// 收藏文件夹管理页。
-class FavoritesPage extends StatelessWidget {
+/// 收藏文件夹管理页：本地与网盘文件夹分型展示，点击跳对应浏览页。
+class FavoritesPage extends ConsumerWidget {
   const FavoritesPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final favs = AppStore.favorites;
     return Scaffold(
       appBar: AppBar(title: const Text('收藏的文件夹')),
       body: favs.isEmpty
-          ? const Center(child: Text('暂无收藏，去「文件」页长按或点 ★ 收藏'))
+          ? const Center(child: Text('暂无收藏，去「文件」或「网盘」页点 ★ 收藏'))
           : ListView.separated(
               itemCount: favs.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
-              itemBuilder: (_, i) {
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (context, i) {
                 final f = favs[i];
+                final isCloud = f.startsWith(AppStore.cloudFavPrefix);
+                final cloudPath = isCloud
+                    ? f.substring(AppStore.cloudFavPrefix.length)
+                    : null;
+                final title = isCloud
+                    ? (cloudPath == null || cloudPath == '/' || cloudPath.isEmpty
+                        ? '网盘根目录'
+                        : cloudPath.split('/').last)
+                    : FsService.fileNameOf(f);
                 return ListTile(
-                  leading: const Icon(Icons.folder, color: Colors.amber),
-                  title: Text(FsService.fileNameOf(f)),
+                  leading: isCloud
+                      ? const Icon(Icons.cloud_outlined, color: Colors.indigo)
+                      : const Icon(Icons.folder, color: Colors.amber),
+                  title: Text(title),
                   subtitle: Text(
-                    f,
+                    isCloud ? (cloudPath ?? f) : f,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => FilesPage(initialPath: f),
-                      ),
-                    );
+                    if (isCloud && cloudPath != null) {
+                      // 跳网盘 Tab：先设目录再切 Tab（首页 IndexedStack 监听 provider）。
+                      ref.read(cloudPathProvider.notifier).set(cloudPath);
+                      ref.read(currentTabProvider.notifier).set(2);
+                      Navigator.of(context).pop();
+                    } else if (!isCloud) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => FilesPage(initialPath: f),
+                        ),
+                      );
+                    }
                   },
                 );
               },

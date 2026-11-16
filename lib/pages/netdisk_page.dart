@@ -5,12 +5,16 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../services/app_store.dart';
 import '../services/netdisk/baidu_api.dart';
 import '../services/netdisk/baidu_auth.dart';
 import '../services/netdisk/baidu_config.dart';
+import '../services/netdisk/download_service.dart';
 import '../services/netdisk/play_source.dart';
 import '../state.dart';
 import 'netdisk_credentials_page.dart';
+import 'netdisk_download_page.dart';
+import 'netdisk_search_page.dart';
 import 'player_page.dart';
 
 /// 网盘 Tab：百度网盘登录 + 云端目录浏览 + 在线播放。
@@ -314,6 +318,7 @@ class _NetdiskBrowserState extends ConsumerState<_NetdiskBrowser>
   bool _desc = false;
   (int, int)? _quota; // (used, total)
   final Map<int, String> _thumbs = {}; // fsId → 缩略图 URL
+  int _favVersion = 0; // 收藏变更计数：驱动收藏栏/AppBar 重建
   final ScrollController _scroll = ScrollController();
 
   @override
@@ -453,6 +458,16 @@ class _NetdiskBrowserState extends ConsumerState<_NetdiskBrowser>
     _load();
   }
 
+  /// 收藏/取消收藏当前云盘文件夹。
+  Future<void> _toggleFav() async {
+    await AppStore.toggleCloudFavorite(_path);
+    setState(() => _favVersion++);
+  }
+
+  /// 收藏 chip 显示名：根目录给固定名，其余取最后一段。
+  String _cloudFavLabel(String path) =>
+      path == '/' || path.isEmpty ? '网盘根目录' : path.split('/').last;
+
   Future<void> _logout() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -475,10 +490,37 @@ class _NetdiskBrowserState extends ConsumerState<_NetdiskBrowser>
     super.build(context);
     final path = ref.watch(cloudPathProvider);
     final dirName = path == '/' ? '网盘根目录' : path.split('/').last;
+    final isFav = AppStore.isCloudFavorite(path);
     return Scaffold(
       appBar: AppBar(
         title: Text(dirName, overflow: TextOverflow.ellipsis),
         actions: [
+          IconButton(
+            tooltip: isFav ? '取消收藏' : '收藏此文件夹',
+            onPressed: _toggleFav,
+            icon: Icon(
+              isFav ? Icons.star : Icons.star_border,
+              color: isFav ? Colors.amber : null,
+            ),
+          ),
+          IconButton(
+            tooltip: '搜索网盘视频',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const NetdiskSearchPage()),
+              );
+            },
+            icon: const Icon(Icons.search),
+          ),
+          IconButton(
+            tooltip: '下载管理',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const NetdiskDownloadPage()),
+              );
+            },
+            icon: const Icon(Icons.download_outlined),
+          ),
           IconButton(
             tooltip: '排序',
             onPressed: _pickSort,
@@ -502,6 +544,32 @@ class _NetdiskBrowserState extends ConsumerState<_NetdiskBrowser>
       ),
       body: Column(
         children: [
+          // 云盘收藏栏（与文件页收藏栏同款式）。
+          if (AppStore.cloudFavorites.isNotEmpty)
+            SizedBox(
+              key: ValueKey('cfavs-$_favVersion'),
+              height: 44,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                children: [
+                  for (final f in AppStore.cloudFavorites)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: InputChip(
+                        avatar: const Icon(Icons.star, size: 16, color: Colors.amber),
+                        label: Text(_cloudFavLabel(f),
+                            style: const TextStyle(fontSize: 12)),
+                        onPressed: () => _enter(f),
+                        onDeleted: () async {
+                          await AppStore.toggleCloudFavorite(f);
+                          setState(() => _favVersion++);
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            ),
           // 面包屑。
           SizedBox(
             height: 36,
@@ -665,7 +733,7 @@ class _NetdiskBrowserState extends ConsumerState<_NetdiskBrowser>
               ? Image.network(
                   thumbUrl,
                   fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => _videoPlaceholder(),
+                  errorBuilder: (_, _, _) => _videoPlaceholder(),
                   // 缩略图 URL 带 8h 签名，不缓存到磁盘。
                 )
               : _videoPlaceholder(),
@@ -675,6 +743,15 @@ class _NetdiskBrowserState extends ConsumerState<_NetdiskBrowser>
       subtitle: Text(
         '${e.sizeLabel} · ${_fmtDate(e.modifiedSec)}',
         style: const TextStyle(fontSize: 11),
+      ),
+      trailing: IconButton(
+        tooltip: '下载到本机',
+        onPressed: () => _download(e),
+        icon: Icon(
+          Icons.download_rounded,
+          size: 22,
+          color: Colors.grey[600],
+        ),
       ),
       onTap: () {
         Navigator.of(context)
@@ -689,6 +766,24 @@ class _NetdiskBrowserState extends ConsumerState<_NetdiskBrowser>
         ))
             .then((_) => _load());
       },
+    );
+  }
+
+  /// 加入下载队列（云盘路径去重）；重复时仅提示。
+  Future<void> _download(CloudEntry e) async {
+    final added = await DownloadService.instance.add(
+      fsId: e.fsId,
+      cloudPath: e.path,
+      name: e.name,
+      size: e.size,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(added ? '已加入下载队列：${e.name}' : '该文件已在下载列表中'),
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ),
     );
   }
 

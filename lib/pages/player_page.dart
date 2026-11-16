@@ -78,6 +78,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   /// 当前清晰度 key（空串 = 原画/无清晰度概念）。
   String _quality = '';
 
+  /// 场景切分点（秒，升序）：百度源 filemetas 的 scene_info（手册 A.9）。
+  /// 进度条章节刻度 + 「下一场景」跳转；仅在线源拉取，失败静默。
+  List<int> _sceneMarks = const [];
+
   // —— 在线流打开自愈状态：等待 mpv 解析出轨道视为打开成功；
   //    期间收到 lavf/demux 错误（如分片扩展名被 ffmpeg 9 拒绝）则换下一档
   //    demuxer-lavf-o 重试。
@@ -204,14 +208,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         });
     // 手势能力探测：读不到当前值说明平台未实现插件（如音量控制的桌面端），
     // 静默禁用对应手势，避免播放中抛 MissingPluginException。
-    ScreenBrightness.instance.application.then(
+    ScreenBrightness.instance.application.then<void>(
       (v) => _brightness = v,
       onError: (_) => _brightnessSupported = false,
     );
     VolumeController.instance
       ..showSystemUI =
           false // 音量 HUD 自绘，不叠加系统条
-      ..getVolume().then(
+      ..getVolume().then<void>(
         (v) => _volume = v,
         onError: (_) => _volumeSupported = false,
       );
@@ -230,6 +234,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     // 本地源：续播位置在打开后 seek；在线源由 _openStream 透传。
     final saved = AppStore.getPosition(_source.resumeKey);
     final posMs = (saved?['pos'] as num?)?.toInt() ?? 0;
+    unawaited(_fetchSceneMarks()); // 场景刻度异步拉取，不阻塞起播
     await _openStream(qualityKey: quality, resumeMs: posMs);
   }
 
@@ -414,6 +419,37 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     await _openStream(qualityKey: key, resumeMs: pos > 0 ? pos : null);
   }
 
+  /// 拉取当前百度源的场景切分点（附录 A.9）。失败静默：无标记不影响播放。
+  /// 切集后 _source 已替换并重拉；同一文件换清晰度不重拉（复用已有刻度）。
+  Future<void> _fetchSceneMarks() async {
+    final src = _source;
+    if (src is! BaiduPlayableSource) return;
+    try {
+      final fsid = src.fsId ?? await BaiduApi.resolveFsid(src.cloudPath);
+      final marks = await BaiduApi.sceneInfo(fsid);
+      if (!mounted || _source != src) return;
+      setState(() => _sceneMarks = marks);
+    } catch (e) {
+      debugPrint('[scene] scene_info 获取失败: $e');
+    }
+  }
+
+  bool get _hasNextScene {
+    final posSec = _player.state.position.inMilliseconds ~/ 1000;
+    return _sceneMarks.any((m) => m > posSec + 2);
+  }
+
+  /// 跳到下一个场景切分点（当前点 2s 容差，避免原地跳）。
+  Future<void> _nextScene() async {
+    final posSec = _player.state.position.inMilliseconds ~/ 1000;
+    for (final m in _sceneMarks) {
+      if (m > posSec + 2) {
+        await _player.seek(Duration(seconds: m));
+        return;
+      }
+    }
+  }
+
   /// mpv start 属性的时间格式（秒，含毫秒）。
   String _mpvTime(int ms) => (ms / 1000).toStringAsFixed(3);
 
@@ -455,6 +491,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     setState(() {
       _source = _playlist[index].source;
       _playlistIndex = index;
+      _sceneMarks = const []; // 新源在 _open() 里重拉
       // 小屏切集后关闭抽屉回画面，桌面端保持展开。
       if (Platform.isAndroid || Platform.isIOS) _playlistOpen = false;
     });
@@ -1235,7 +1272,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _SeekBar(player: _player),
+              _SeekBar(player: _player, marks: _sceneMarks),
               Row(
                 children: [
                   IconButton(
@@ -1272,6 +1309,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                     icon: const Icon(Icons.lock_outline, color: Colors.white),
                     tooltip: '锁定控制',
                   ),
+                  // 场景跳转：百度源带 scene_info 时显示（手册 A.9）。
+                  if (_sceneMarks.isNotEmpty)
+                    IconButton(
+                      tooltip: _hasNextScene ? '下一场景' : '已是最后一个场景',
+                      onPressed: _hasNextScene ? _nextScene : null,
+                      icon: const Icon(
+                        Icons.next_plan_outlined,
+                        color: Colors.white,
+                      ),
+                    ),
                   const Spacer(),
                   // 倍速（跨视频/会话持久化，打开媒体时恢复）。
                   PopupMenuButton<double>(
@@ -1426,10 +1473,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   }
 }
 
-/// 进度条：position/duration 流 + 拖动 seek。
+/// 进度条：position/duration 流 + 拖动 seek + 场景章节刻度（手册 A.9）。
 class _SeekBar extends StatefulWidget {
   final Player player;
-  const _SeekBar({required this.player});
+
+  /// 场景切分点（秒，升序）；空列表 = 无刻度。
+  final List<int> marks;
+  const _SeekBar({required this.player, this.marks = const []});
 
   @override
   State<_SeekBar> createState() => _SeekBarState();
@@ -1464,6 +1514,19 @@ class _SeekBarState extends State<_SeekBar> {
                   : '${two(m)}:${two(sec)}';
             }
 
+            final Widget slider = Slider(
+              value: value,
+              max: maxS <= 0 ? 1.0 : maxS,
+              onChanged: maxS <= 0
+                  ? null
+                  : (v) => setState(() => _dragValue = v),
+              onChangeEnd: (v) async {
+                await widget.player.seek(
+                  Duration(milliseconds: (v * 1000).round()),
+                );
+                if (mounted) setState(() => _dragValue = -1);
+              },
+            );
             return Row(
               children: [
                 Text(
@@ -1471,19 +1534,21 @@ class _SeekBarState extends State<_SeekBar> {
                   style: const TextStyle(color: Colors.white70, fontSize: 11),
                 ),
                 Expanded(
-                  child: Slider(
-                    value: value,
-                    max: maxS <= 0 ? 1.0 : maxS,
-                    onChanged: maxS <= 0
-                        ? null
-                        : (v) => setState(() => _dragValue = v),
-                    onChangeEnd: (v) async {
-                      await widget.player.seek(
-                        Duration(milliseconds: (v * 1000).round()),
-                      );
-                      if (mounted) setState(() => _dragValue = -1);
-                    },
-                  ),
+                  child: widget.marks.isEmpty
+                      ? slider
+                      : Stack(
+                          children: [
+                            Positioned.fill(
+                              child: IgnorePointer(
+                                child: CustomPaint(
+                                  painter:
+                                      _SceneMarksPainter(widget.marks, maxS),
+                                ),
+                              ),
+                            ),
+                            slider,
+                          ],
+                        ),
                 ),
                 Text(
                   fmt(dur),
@@ -1495,6 +1560,52 @@ class _SeekBarState extends State<_SeekBar> {
         );
       },
     );
+  }
+}
+
+/// 场景切分点刻度：在进度条轨道上画竖向小标记（忽略指针，不干扰拖动）。
+class _SceneMarksPainter extends CustomPainter {
+  final List<int> marks; // 秒，升序
+  final double maxSeconds;
+
+  _SceneMarksPainter(this.marks, this.maxSeconds);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (maxSeconds <= 0) {
+      return;
+    }
+    final paint = Paint()
+      ..color = Colors.white38
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round;
+    // 与 Slider 拇指行程对齐：左右各留一个拇指半径（默认 10）。
+    const inset = 10.0;
+    final span = size.width - inset * 2;
+    for (final m in marks) {
+      final f = m / maxSeconds;
+      if (f <= 0 || f >= 1) {
+        continue;
+      }
+      final x = inset + f * span;
+      canvas.drawLine(
+        Offset(x, size.height / 2 - 6),
+        Offset(x, size.height / 2 + 6),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_SceneMarksPainter old) =>
+      old.maxSeconds != maxSeconds || !_listEq(old.marks, marks);
+
+  static bool _listEq(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 }
 

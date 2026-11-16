@@ -43,15 +43,37 @@ class AppStore {
 
   // ---------- 收藏文件夹 ----------
 
+  /// 收藏列表条目：无前缀 = 本地路径；`cloud://<云盘绝对路径>` = 网盘文件夹。
+  /// 前缀方案老数据零迁移（无前缀条目天然按本地处理）。
+  static const String cloudFavPrefix = 'cloud://';
+
   static List<String> get favorites => _p.getStringList('favorites') ?? [];
 
+  /// 本地收藏（不含网盘条目；文件页收藏栏用）。
+  static List<String> get localFavorites =>
+      favorites.where((p) => !p.startsWith(cloudFavPrefix)).toList();
+
+  /// 收藏的网盘文件夹（云盘绝对路径，已剥离前缀）。
+  static List<String> get cloudFavorites => favorites
+      .where((p) => p.startsWith(cloudFavPrefix))
+      .map((p) => p.substring(cloudFavPrefix.length))
+      .toList();
+
   static bool isFavorite(String path) => favorites.contains(path);
+
+  /// 网盘文件夹收藏态（仅用于云盘路径；本地请用 [isFavorite]）。
+  static bool isCloudFavorite(String cloudPath) =>
+      favorites.contains('$cloudFavPrefix$cloudPath');
 
   static Future<void> toggleFavorite(String path) async {
     final list = favorites;
     if (!list.remove(path)) list.add(path);
     await _p.setStringList('favorites', list);
   }
+
+  /// 网盘文件夹收藏开关。
+  static Future<void> toggleCloudFavorite(String cloudPath) =>
+      toggleFavorite('$cloudFavPrefix$cloudPath');
 
   // ---------- 断点续播 / 播放记录 ----------
 

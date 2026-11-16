@@ -7,7 +7,7 @@
     export BD_TOKEN=<access_token>   # 设备码 OAuth 获取，30 天有效
     python -I probe.py
 
-无硬编码密钥；全只读调用（list/filemetas/streaming/dlink Range），不写盘、不删除。
+无硬编码密钥；全只读调用（list/search/filemetas/streaming/dlink Range），不写盘、不删除。
 """
 import json
 import os
@@ -112,6 +112,27 @@ def main():
     results.append(("list 逐层浏览", True))
     time.sleep(0.5)
 
+    # 3.5) search（关键词搜索：key≤30 UTF-8 字符；规格见评估文档附录 A.7，2026-09-08 版官方文档核实）
+    banner("search（method=search 全盘递归，category=1 只搜视频）")
+    sk = os.environ.get("BD_SEARCH_KEY", "")
+    if not sk:
+        # 默认用刚扫描到的真实文件名前 6 字符做关键词，保证命中可验证
+        sk = vids[0]["server_filename"][:6] if vids else "1080"
+    st, _, d = api("file", "search", key=sk, category="1", recursion="1", web="1", num="500")
+    if errno_of(d) == 0:
+        items = d.get("list") or []
+        print("http", st, "| 关键词:", sk, "| 命中:", len(items), "| has_more:", d.get("has_more"))
+        for it in items[:10]:
+            print("  HIT cat=%s %s (%.1fMB)" % (it.get("category"), it.get("path"),
+                                                (it.get("size") or 0) / 1048576.0))
+        thumbs_ok = all((it.get("thumbs") or it.get("category") != 1) for it in items[:10])
+        print("  web=1 缩略图直出（前10条视频）:", "有" if thumbs_ok else "缺失")
+        results.append(("search 关键词搜索", True))
+    else:
+        print("FAIL http", st, json.dumps(d, ensure_ascii=False)[:300])
+        results.append(("search 关键词搜索", False))
+    time.sleep(0.5)
+
     if not vids:
         banner("结果汇总")
         for name, okk in results:
@@ -129,6 +150,17 @@ def main():
         fm = d["info"][0]
         print("http", st, "| thumbs:", json.dumps(fm.get("thumbs"), ensure_ascii=False)[:120])
         print("  width:", fm.get("width"), "| dlink:", (fm.get("dlink") or "")[:60] + "...")
+        # 全字段 dump（验证官方有没有雪碧图之类预览字段）+ scene_info 解析（附录 A.9）
+        print("  全部字段:", ",".join(sorted(fm.keys())))
+        si_raw = fm.get("scene_info")
+        if si_raw:
+            try:
+                si = json.loads(si_raw) if isinstance(si_raw, str) else si_raw
+                print("  scene_info: %d 个切分点, 前10: %s" % (len(si), si[:10]))
+            except Exception:
+                print("  scene_info 原始:", str(si_raw)[:200])
+        else:
+            print("  scene_info: 无")
         results.append(("filemetas", True))
     else:
         print("FAIL http", st, json.dumps(d, ensure_ascii=False)[:300])
@@ -176,6 +208,18 @@ def main():
         st, hh, body = get(dl, headers={"User-Agent": "pan.baidu.com", "Range": "bytes=0-65535"})
         print("  带 UA: http %s 收到 %d bytes" % (st, len(body)))
         results.append(("dlink 拉流", st in (200, 206) and len(body) > 0))
+
+        # 任意偏移 Range（下载到本地可行性：断点续传依赖，顺带测速）
+        n = 2097152  # 拉 2MB
+        off = 104857600 if video["size"] > 110 * 1048576 else max(0, video["size"] // 2)
+        t0 = time.time()
+        st2, hh2, body2 = get(dl, headers={"User-Agent": "pan.baidu.com",
+                                           "Range": "bytes=%d-%d" % (off, off + n - 1)}, timeout=60)
+        dt = time.time() - t0
+        speed = len(body2) / 1048576.0 / dt if dt > 0 else 0.0
+        print("  断点续传(偏移 %dMB 拉 2MB): http %s 收到 %d bytes, %.2fs ≈ %.1f MB/s"
+              % (off // 1048576, st2, len(body2), dt, speed))
+        results.append(("dlink Range 任意偏移", st2 in (200, 206) and len(body2) >= n * 0.9))
 
     banner("结果汇总")
     for name, okk in results:

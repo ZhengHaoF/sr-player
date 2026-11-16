@@ -13,6 +13,9 @@ class CloudEntry {
   final int category; // 1 视频 / 2 音频 / 3 图片 / 4 文档 / 5 应用 / 6 其他 / 7 种子
   final int modifiedSec;
 
+  /// 缩略图直链（search web=1 / filemetas 提供，可空；8h 签名有效期）。
+  final String? thumbUrl;
+
   const CloudEntry({
     required this.fsId,
     required this.path,
@@ -21,6 +24,7 @@ class CloudEntry {
     required this.size,
     required this.category,
     required this.modifiedSec,
+    this.thumbUrl,
   });
 
   bool get isVideo => !isDir && category == 1;
@@ -113,21 +117,59 @@ class BaiduApi {
       'order': order,
       'desc': desc ? 1 : 0,
     });
-    final rawList = (data['list'] as List?) ?? const [];
-    final entries = rawList
-        .whereType<Map<String, dynamic>>()
-        .map((m) => CloudEntry(
-              fsId: (m['fs_id'] as num?)?.toInt() ?? 0,
-              path: (m['path'] as String?) ?? '',
-              name: (m['server_filename'] as String?) ?? '',
-              isDir: (m['isdir'] as num?)?.toInt() == 1,
-              size: (m['size'] as num?)?.toInt() ?? 0,
-              category: (m['category'] as num?)?.toInt() ?? 6,
-              modifiedSec: (m['server_mtime'] as num?)?.toInt() ?? 0,
-            ))
-        .toList();
+    final entries = _parseEntries(data['list'] as List?);
     final hasMore = entries.length >= limit && start + entries.length < ((data['total'] as num?)?.toInt() ?? start + entries.length);
     return (entries, hasMore);
+  }
+
+  /// list[] 同构条目解析：method=list 与 method=search 共用。
+  /// thumbs 四档任取大图（url3>url2>url1>icon），与网盘页逻辑一致。
+  static List<CloudEntry> _parseEntries(List? raw) {
+    return (raw ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map((m) {
+          final thumbs = m['thumbs'];
+          String? thumb;
+          if (thumbs is Map) {
+            thumb =
+                (thumbs['url3'] ?? thumbs['url2'] ?? thumbs['url1'] ??
+                thumbs['icon']) as String?;
+            if (thumb != null && thumb.isEmpty) thumb = null;
+          }
+          return CloudEntry(
+            fsId: (m['fs_id'] as num?)?.toInt() ?? 0,
+            path: (m['path'] as String?) ?? '',
+            name: (m['server_filename'] as String?) ?? '',
+            isDir: (m['isdir'] as num?)?.toInt() == 1,
+            size: (m['size'] as num?)?.toInt() ?? 0,
+            category: (m['category'] as num?)?.toInt() ?? 6,
+            modifiedSec: (m['server_mtime'] as num?)?.toInt() ?? 0,
+            thumbUrl: thumb,
+          );
+        })
+        .toList();
+  }
+
+  /// 关键词搜索（手册 A.7；2026-11-15 探针实测权限通过）。
+  /// key ≤ 30 个 UTF-8 字符（接口限制，UI 侧限制输入长度）。
+  /// category=1 只搜视频；recursion=1 全盘递归；web=1 响应直带缩略图。
+  /// 返回 (条目, has_more)。接口无 start/cursor 翻页参数，单页上限 500。
+  static Future<(List<CloudEntry>, bool)> search(
+    String key, {
+    String dir = '/',
+    int category = 1,
+    bool recursion = true,
+  }) async {
+    final data = await _get('file', method: 'search', query: {
+      'key': key,
+      'dir': dir,
+      'category': category,
+      'num': 500,
+      if (recursion) 'recursion': 1,
+      'web': 1,
+    });
+    final hasMore = (data['has_more'] as num?)?.toInt() == 1;
+    return (_parseEntries(data['list'] as List?), hasMore);
   }
 
   /// 批量文件元信息（≤100 个 fsid）。返回 fsid → info 映射。
@@ -155,6 +197,33 @@ class BaiduApi {
 
   static String jsonEncodeList(List<int> ids) =>
       '[${ids.join(',')}]';
+
+  /// 场景切分点（秒）：filemetas(extra=1) 的 scene_info，如 "[0,20,31,...]"
+  /// （手册 A.9）。用于播放页进度条章节标记 + 场景跳转。
+  /// 无数据/解析失败返回空表（调用方静默处理）。
+  static Future<List<int>> sceneInfo(int fsId) async {
+    final data = await _get('file', method: 'filemetas', query: {
+      'fsids': jsonEncodeList([fsId]),
+      'extra': 1,
+    });
+    final info =
+        (data['info'] as List?)?.whereType<Map<String, dynamic>>().toList() ??
+        const <Map<String, dynamic>>[];
+    if (info.isEmpty) return const [];
+    final raw = info.first['scene_info'];
+    if (raw is List) {
+      return raw.whereType<num>().map((n) => n.toInt()).toList()..sort();
+    }
+    if (raw is String && raw.isNotEmpty) {
+      // 实测是 JSON 数组字符串，容错直接抽数字序列。
+      return RegExp(r'\d+')
+          .allMatches(raw)
+          .map((m) => int.parse(m.group(0)!))
+          .toList()
+        ..sort();
+    }
+    return const [];
+  }
 
   /// 容量信息（已用/总量，字节）。走实测可用的 web 风格端点。
   static Future<(int used, int total)> quota() async {
