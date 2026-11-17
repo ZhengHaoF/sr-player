@@ -58,6 +58,9 @@ key.properties
 *.jks
 *.keystore
 
+# 应用内凭证文件（真实凭证不入库，本地构建用）
+lib/services/netdisk/baidu_secrets.dart
+
 # DevTools 本地配置
 devtools_options.yaml
 
